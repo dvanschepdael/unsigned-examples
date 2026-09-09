@@ -1,0 +1,13 @@
+**/build/
+**/config.local.mk
+**/gngeo_log.txt
+**/.gngeo/
+**/assets/generated/
+**/assets/source/p1/
+**/assets/source/p2/
+/external/
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
+*~
