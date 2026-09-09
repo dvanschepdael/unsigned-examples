@@ -26,7 +26,8 @@ The architecture follows the responsibility split used by traditional 2D fighter
 - `src/versus_fighter.*`: character state machine, movement, input buffer and move execution.
 - `src/versus_content.*`: immutable animation, timing, hitbox/hurtbox and sprite layout data.
 - `src/versus_hud.*`: FIX-layer presentation.
-- `scripts/prepare-fighting-assets.sh`: packs normalized source frames into Neo Geo C-ROM data.
+- `scripts/prepare-fighting-assets.py`: downloads and normalizes the teaching spritesheets, then generates Neo Geo C-ROM data.
+- `scripts/prepare-fighting-assets.sh`: small shell entry point used by Make.
 
 ## Controls
 
@@ -40,30 +41,50 @@ The architecture follows the responsibility split used by traditional 2D fighter
 
 ## Spritesheets
 
-The reference art comes from The Spriters Resource, using Kyo and Iori from *The King of Fighters R-2*. This is an educational example and the source attribution is kept in `assets/source/README.md`.
+The teaching art comes from The Spriters Resource, using Kyo and Iori from *The King of Fighters R-2*. Source attribution is kept in `assets/source/README.md`.
 
-After preparing `assets/source/p1/000.png..028.png` and `assets/source/p2/000.png..028.png`:
+The asset pipeline is automatic. It:
+
+1. downloads the Kyo and Iori source sheets from their Spriters Resource asset pages;
+2. verifies the expected source dimensions;
+3. removes the sheet background and detects sprite-like connected regions;
+4. selects 29 regions per fighter in deterministic row-major order;
+5. normalizes every frame to a 64x64 Neo Geo-friendly cell;
+6. builds one shared 16-color indexed atlas;
+7. generates `fighters.c1`, `fighters.c2` with ngdevkit `tiletool.py`;
+8. generates `fighters.pal` with ngdevkit `paltool.py`.
+
+Generated files are placed under `assets/generated/` and are intentionally not source-authored files.
+
+You can run the asset step explicitly:
 
 ```sh
-./scripts/prepare-fighting-assets.sh
-make -j2
+make assets
 ```
 
-The script follows ngdevkit's sprite workflow: normalize frames, combine them into a shared-palette atlas, run `tiletool.py --sprite -c`, and generate palette data with `paltool.py`.
+Normal builds also depend on this step, so `make gngeo-aes` or `make gngeo-mvs` will generate the fighter graphics automatically when needed.
 
-Without generated fighter C-ROM files the project still builds, but the fighters are invisible; the gameplay/HUD logic remains usable for development and tests.
+The extraction is deliberately simple and educational rather than a production-grade semantic animation importer. The generated frame sequence can be inspected under `assets/generated/frames/p1/` and `assets/generated/frames/p2/` if you want to refine the exact animation mapping later.
 
 ## Build
 
 From the repository root, install the pinned dependencies once:
 
 ```sh
-./scripts/setup-deps.sh
+bash scripts/setup-deps.sh
 cd versus-fighting
-make -j2
 make gngeo-aes
 # or
 make gngeo-mvs
+```
+
+Requirements for the automatic graphics pipeline are Python 3 and ImageMagick (`magick`) in addition to the normal ngdevkit toolchain.
+
+To force a complete regeneration of SDK outputs and downloaded/generated graphics:
+
+```sh
+make distclean
+make gngeo-aes
 ```
 
 The project starts from the `unsigned-template` architecture and keeps its pinned Unsigned/ngdevkit versions and AES/MVS runtime lifecycle.
