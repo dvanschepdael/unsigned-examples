@@ -6,7 +6,15 @@
 #include "versus_hud.h"
 
 #include <ngdevkit/bios-calls.h>
+#include <ngdevkit/neogeo.h>
 #include <ngdevkit/ng-fix.h>
+
+static void versus_load_fix_palette(void) {
+    /* Palette 0 is used by ng_text/ng_center_text and by the HUD. */
+    MMAP_PALBANK1[0] = 0x8000;
+    MMAP_PALBANK1[1] = 0x0fff;
+    MMAP_PALBANK1[2] = 0x0555;
+}
 
 bool versus_game_initialize(void *context) {
     VersusGame *game = context;
@@ -14,9 +22,12 @@ bool versus_game_initialize(void *context) {
 
     game->camera = (UCamera){ .x = 0, .y = 0 };
     unsigned_viewport_init(&game->viewport, 0, 0, 320, 224, &game->camera);
+
+    versus_load_fix_palette();
     unsigned_sprite_palette_load(1u, VERSUS_P1_PALETTE);
     unsigned_sprite_palette_load(2u, VERSUS_P2_PALETTE);
     unsigned_sprite_palette_set_backdrop_color(0x0000);
+
     if (!versus_match_init(&game->match, unsigned_video_get_refresh_rate())) return false;
 
     game->match_started = false;
