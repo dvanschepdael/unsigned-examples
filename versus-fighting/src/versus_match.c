@@ -8,6 +8,8 @@
 #define OUTRO_SECONDS 2u
 #define ROUNDS_TO_WIN 2u
 #define MIN_SEPARATION 24
+#define FIGHTER_RENDER_HALF_WIDTH 32
+#define FIGHTER_RENDER_HEIGHT 64
 
 static void match_begin_round(VersusMatch *match) {
     versus_fighter_reset(&match->fighters[0], 92, 184, true);
@@ -151,10 +153,25 @@ void versus_match_tick(VersusMatch *match, const UInputManager *input) {
     if (match->fighters[0].health == 0 || match->fighters[1].health == 0 || match->round_frames_remaining == 0u) match_finish_round(match);
 }
 
+static Vec2 fighter_render_position(const VersusFighter *fighter) {
+    /* Gameplay position is the fighter's ground/feet anchor. Unsigned's sprite renderer
+       expects the top-left corner of the 64x64 sprite. Keep gameplay and presentation
+       coordinate conventions separate. */
+    return (Vec2){
+        .x = (s16)(fighter->position.x - FIGHTER_RENDER_HALF_WIDTH),
+        .y = (s16)(fighter->position.y - FIGHTER_RENDER_HEIGHT),
+    };
+}
+
 void versus_match_render(VersusMatch *match, const UViewport *viewport) {
+    Vec2 p1_render;
+    Vec2 p2_render;
     if (match == NULL || viewport == NULL) return;
-    unsigned_sprite_renderer_draw(&match->fighters[0].sprite, viewport, &match->fighters[0].position);
-    unsigned_sprite_renderer_draw(&match->fighters[1].sprite, viewport, &match->fighters[1].position);
+
+    p1_render = fighter_render_position(&match->fighters[0]);
+    p2_render = fighter_render_position(&match->fighters[1]);
+    unsigned_sprite_renderer_draw(&match->fighters[0].sprite, viewport, &p1_render);
+    unsigned_sprite_renderer_draw(&match->fighters[1].sprite, viewport, &p2_render);
 }
 
 bool versus_match_finished(const VersusMatch *match) {
