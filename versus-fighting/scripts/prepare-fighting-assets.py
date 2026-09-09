@@ -89,11 +89,9 @@ def download_sheet(magick, asset, raw_dir):
         return output
 
     page, final_url, content_type = request_bytes(asset["page_url"])
-    if content_type.startswith("image/"):
-        candidates = [final_url]
-    else:
-        candidates = candidate_image_urls(page.decode("utf-8", errors="replace"), final_url)
-
+    candidates = [final_url] if content_type.startswith("image/") else candidate_image_urls(
+        page.decode("utf-8", errors="replace"), final_url
+    )
     if not candidates:
         raise RuntimeError(f"could not find the PNG URL on {asset['page_url']}")
 
@@ -106,7 +104,6 @@ def download_sheet(magick, asset, raw_dir):
                 continue
             if not candidate_type.startswith("image/"):
                 continue
-
             temporary_image = Path(temporary) / f"candidate-{index}.png"
             temporary_image.write_bytes(data)
             try:
@@ -137,7 +134,7 @@ def sort_row_major(components):
         selected_distance = 9999.0
         for row in rows:
             distance = abs(center_y - row["center_y"])
-            if distance <= max(12.0, component["h"] * 0.35) and distance < selected_distance:
+            if distance <= max(14.0, component["h"] * 0.35) and distance < selected_distance:
                 selected_row = row
                 selected_distance = distance
         if selected_row is None:
@@ -162,14 +159,16 @@ def detect_sprite_regions(magick, sheet, work_dir):
     transparent = work_dir / f"{sheet.stem}-transparent.png"
     mask = work_dir / f"{sheet.stem}-mask.png"
 
+    # First remove the sheet background. Building the component mask from the
+    # resulting alpha channel avoids ImageMagick-version-specific colour names
+    # such as gray(0), srgb(0,0,0) and srgba(0,0,0,1).
     run([
         magick, str(sheet), "-alpha", "on", "-fuzz", "2%",
         "-transparent", background, str(transparent),
     ])
     run([
-        magick, str(sheet), "-alpha", "off", "-fuzz", "2%",
-        "-fill", "black", "+opaque", background,
-        "-fill", "white", "-opaque", background, str(mask),
+        magick, str(transparent), "-alpha", "extract", "-threshold", "0",
+        str(mask),
     ])
 
     verbose = run([
@@ -177,20 +176,30 @@ def detect_sprite_regions(magick, sheet, work_dir):
         "-connected-components", "8", "null:",
     ], capture=True)
 
+    parsed = 0
     components = []
     for line in verbose.splitlines():
         match = COMPONENT_RE.match(line)
         if match is None:
             continue
+        parsed += 1
         width, height, x, y, area = (int(match.group(index)) for index in range(1, 6))
-        color = match.group(6).lower()
-        if "gray(0" not in color and "black" not in color:
-            continue
-        if width >= 10 and height >= 18 and width <= 72 and height <= 72 and area >= 90:
+
+        # The huge background component naturally fails these bounds. We do
+        # not inspect the textual colour representation at all.
+        if width >= 8 and height >= 16 and width <= 112 and height <= 112 and area >= 70:
             components.append({"x": x, "y": y, "w": width, "h": height, "area": area})
 
+    print(
+        f"{sheet.stem}: connected-components parsed={parsed}, "
+        f"sprite-like={len(components)}"
+    )
     if not components:
-        raise RuntimeError(f"no sprite-like regions detected in {sheet}")
+        debug_mask = sheet.parent / f"{sheet.stem}-debug-mask.png"
+        shutil.copyfile(mask, debug_mask)
+        raise RuntimeError(
+            f"no sprite-like regions detected in {sheet}; debug mask written to {debug_mask}"
+        )
     return transparent, sort_row_major(components)
 
 
