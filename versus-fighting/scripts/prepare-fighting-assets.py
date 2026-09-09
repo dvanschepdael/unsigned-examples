@@ -12,6 +12,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from PIL import Image
+
 ASSETS = (
     {
         "player": "p1",
@@ -159,15 +161,14 @@ def detect_sprite_regions(magick, sheet, work_dir):
     transparent = work_dir / f"{sheet.stem}-transparent.png"
     mask = work_dir / f"{sheet.stem}-mask.png"
 
-    # First remove the sheet background. Building the component mask from the
-    # resulting alpha channel avoids ImageMagick-version-specific colour names
-    # such as gray(0), srgb(0,0,0) and srgba(0,0,0,1).
     run([
         magick, str(sheet), "-alpha", "on", "-fuzz", "2%",
         "-transparent", background, str(transparent),
     ])
     run([
         magick, str(transparent), "-alpha", "extract", "-threshold", "0",
+        "-morphology", "Close", "Diamond:1",
+        "-morphology", "Dilate", "Diamond:1",
         str(mask),
     ])
 
@@ -184,16 +185,10 @@ def detect_sprite_regions(magick, sheet, work_dir):
             continue
         parsed += 1
         width, height, x, y, area = (int(match.group(index)) for index in range(1, 6))
-
-        # The huge background component naturally fails these bounds. We do
-        # not inspect the textual colour representation at all.
         if width >= 8 and height >= 16 and width <= 112 and height <= 112 and area >= 70:
             components.append({"x": x, "y": y, "w": width, "h": height, "area": area})
 
-    print(
-        f"{sheet.stem}: connected-components parsed={parsed}, "
-        f"sprite-like={len(components)}"
-    )
+    print(f"{sheet.stem}: connected-components parsed={parsed}, sprite-like={len(components)}")
     if not components:
         debug_mask = sheet.parent / f"{sheet.stem}-debug-mask.png"
         shutil.copyfile(mask, debug_mask)
@@ -226,25 +221,50 @@ def extract_frames(magick, sheet, player, frames_dir, work_dir):
         output = output_dir / f"{index:03d}.png"
         run([
             magick, str(transparent), "-crop", geometry, "+repage",
-            "-resize", "60x60>", "-background", "black", "-gravity", "south",
+            "-resize", "60x60>", "-background", "none", "-gravity", "south",
             "-extent", f"{FRAME_SIZE}x{FRAME_SIZE}", str(output),
         ])
     print(f"{player}: wrote {FRAME_COUNT} normalized 64x64 frames")
 
 
-def pack_frames(magick, ngdevkit, generated_dir):
-    frames = []
+def build_indexed_atlas(generated_dir):
+    frame_paths = []
     for player in ("p1", "p2"):
-        frames.extend(
-            str(generated_dir / "frames" / player / f"{index:03d}.png")
+        frame_paths.extend(
+            generated_dir / "frames" / player / f"{index:03d}.png"
             for index in range(FRAME_COUNT)
         )
 
-    combined = generated_dir / "fighters.png"
-    indexed = generated_dir / "fighters.gif"
-    run([magick, *frames, "-append", str(combined)])
-    run([magick, str(combined), "+dither", "-colors", "16", "-type", "Palette", str(indexed)])
+    atlas = Image.new("RGBA", (FRAME_SIZE, FRAME_SIZE * len(frame_paths)), (0, 0, 0, 0))
+    for index, frame_path in enumerate(frame_paths):
+        frame = Image.open(frame_path).convert("RGBA")
+        atlas.alpha_composite(frame, (0, index * FRAME_SIZE))
 
+    atlas.save(generated_dir / "fighters.png")
+
+    # Neo Geo sprite colour index 0 is transparent. Reserve it explicitly,
+    # then place the 15-colour quantized artwork in indices 1..15.
+    rgb = Image.new("RGB", atlas.size, (0, 0, 0))
+    rgb.paste(atlas.convert("RGB"), mask=atlas.getchannel("A"))
+    quantized = rgb.quantize(colors=15, dither=Image.Dither.NONE)
+    source_palette = quantized.getpalette()[:45]
+
+    indexed = Image.new("P", atlas.size, 0)
+    palette = [0, 0, 0] + source_palette
+    palette.extend([0] * (768 - len(palette)))
+    indexed.putpalette(palette)
+
+    alpha = atlas.getchannel("A")
+    qdata = list(quantized.getdata())
+    adata = list(alpha.getdata())
+    indexed.putdata([0 if a == 0 else min(15, q + 1) for q, a in zip(qdata, adata)])
+    indexed.info["transparency"] = 0
+    indexed.save(generated_dir / "fighters.gif", transparency=0)
+
+
+def pack_frames(ngdevkit, generated_dir):
+    build_indexed_atlas(generated_dir)
+    indexed = generated_dir / "fighters.gif"
     python = os.environ.get("PYTHON", sys.executable)
     run([
         python, str(ngdevkit / "tools" / "tiletool.py"), "--sprite", "-c", str(indexed),
@@ -283,7 +303,7 @@ def main():
             work_dir = Path(temporary)
             for asset, sheet in zip(ASSETS, sheets):
                 extract_frames(magick, sheet, asset["player"], frames, work_dir)
-        pack_frames(magick, ngdevkit, generated)
+        pack_frames(ngdevkit, generated)
     except (RuntimeError, OSError, urllib.error.URLError, subprocess.CalledProcessError) as error:
         raise SystemExit(f"asset preparation failed: {error}")
 
