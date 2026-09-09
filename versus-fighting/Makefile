@@ -11,6 +11,10 @@ SDK_BUILD := $(BUILDDIR)/ngdevkit
 SDK := $(abspath $(SDK_BUILD)/install)
 SDK_STAMP := $(SDK_BUILD)/.installed
 ROM := $(BUILDDIR)/rom
+ASSET_STAMP := assets/generated/.stamp
+FIGHT_CROM1 := assets/generated/fighters.c1
+FIGHT_CROM2 := assets/generated/fighters.c2
+FIGHT_PAL := assets/generated/fighters.pal
 
 M68KGCC := m68k-neogeo-elf-gcc
 M68KOBJCOPY := m68k-neogeo-elf-objcopy
@@ -38,17 +42,20 @@ include $(UNSIGNED_DIR)/unsigned.mk
 .PHONY: all sdk cart bios clean distclean gngeo gngeo-aes gngeo-mvs assets
 all: cart bios
 sdk: $(SDK_STAMP)
-assets:
-	bash scripts/prepare-fighting-assets.sh
+assets: $(ASSET_STAMP)
 
 SDK_SOURCES := $(shell find $(NGDEVKIT_DIR) -type f ! -name .git)
 $(SDK_STAMP): ../scripts/build-ngdevkit.sh $(SDK_SOURCES)
 	+bash ../scripts/build-ngdevkit.sh $(NGDEVKIT_DIR) $(SDK_BUILD) "$(shell command -v $(PYTHON))"
 
+$(ASSET_STAMP): scripts/prepare-fighting-assets.sh scripts/prepare-fighting-assets.py $(SDK_STAMP)
+	PYTHON=$(PYTHON) bash scripts/prepare-fighting-assets.sh
+
 $(UNSIGNED_OBJS): $(SDK_STAMP)
 
 GAME_SRCS := main.c $(wildcard src/*.c)
 GAME_OBJS := $(addprefix $(BUILDDIR)/,$(GAME_SRCS:.c=.o))
+$(GAME_OBJS): $(ASSET_STAMP)
 $(BUILDDIR)/%.o: %.c $(SDK_STAMP)
 	@mkdir -p $(dir $@)
 	$(M68KGCC) $(NGCFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -76,11 +83,11 @@ $(SROM): ../external/ngdevkit-examples/00-template/setup/ngdevkit-assets/rom/s1-
 	truncate -s 131072 $@
 $(MROM): $(SDK_STAMP) | $(ROM)
 	$(Z80SDOBJCOPY) -I ihex -O binary $(SDK)/share/ngdevkit/nullsound_driver.ihx $@ --pad-to 131072
-$(CROM1): | $(ROM)
-	@if test -f assets/generated/fighters.c1; then cp assets/generated/fighters.c1 $@; else truncate -s 131072 $@; fi
+$(CROM1): $(ASSET_STAMP) | $(ROM)
+	cp $(FIGHT_CROM1) $@
 	truncate -s 2097152 $@
-$(CROM2): | $(ROM)
-	@if test -f assets/generated/fighters.c2; then cp assets/generated/fighters.c2 $@; else truncate -s 131072 $@; fi
+$(CROM2): $(ASSET_STAMP) | $(ROM)
+	cp $(FIGHT_CROM2) $@
 	truncate -s 2097152 $@
 $(VROM): | $(ROM)
 	truncate -s 524288 $@
@@ -107,6 +114,6 @@ clean:
 	rm -rf build/unsigned build/rom build/src
 	rm -f build/*.o build/*.d build/*.elf build/*.map
 distclean:
-	rm -rf build
+	rm -rf build assets/generated
 
 -include $(GAME_OBJS:.o=.d)
