@@ -122,8 +122,3 @@ void versus_game_render(void *context) {
     unsigned_game_instance_render(&game->runtime);
     versus_hud_render(&game->match);
 }
-
-void versus_game_render_phase(void *context, UNeoGeoPhase phase) {
-    (void)context;
-    (void)phase;
-}
