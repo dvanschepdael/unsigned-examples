@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 ASSETS = (
     {
@@ -106,12 +106,14 @@ def download_sheet(magick, asset, raw_dir):
                 continue
             if not candidate_type.startswith("image/"):
                 continue
+
             temporary_image = Path(temporary) / f"candidate-{index}.png"
             temporary_image.write_bytes(data)
             try:
                 size = image_size(magick, temporary_image)
             except subprocess.CalledProcessError:
                 continue
+
             if size == asset["size"]:
                 output.write_bytes(data)
                 print(f"downloaded {asset['name']} sheet: {candidate}")
@@ -154,6 +156,28 @@ def sort_row_major(components):
     return ordered
 
 
+def is_character_region(width, height, area):
+    """Reject labels, separators, palette strips and tiny detached effects.
+
+    KOF R-2 fighters are compact but still roughly character-shaped.  The old
+    importer accepted regions as short as 16 px and therefore selected wide
+    horizontal decorations before it ever reached the actual fighter poses.
+    """
+    if width < 12 or height < 24 or width > 96 or height > 96:
+        return False
+
+    aspect = width / float(height)
+    if aspect < 0.28 or aspect > 2.0:
+        return False
+
+    # Connected-component area is measured on the dilated mask. Character
+    # bodies have substantially more foreground than text fragments/lines.
+    if area < 180:
+        return False
+
+    return True
+
+
 def detect_sprite_regions(magick, sheet, work_dir):
     background = run(
         [magick, str(sheet), "-format", "%[pixel:p{0,0}]", "info:"], capture=True
@@ -183,39 +207,47 @@ def detect_sprite_regions(magick, sheet, work_dir):
         match = COMPONENT_RE.match(line)
         if match is None:
             continue
+
         parsed += 1
         width, height, x, y, area = (int(match.group(index)) for index in range(1, 6))
-        if width >= 8 and height >= 16 and width <= 112 and height <= 112 and area >= 70:
+        if is_character_region(width, height, area):
             components.append({"x": x, "y": y, "w": width, "h": height, "area": area})
 
-    print(f"{sheet.stem}: connected-components parsed={parsed}, sprite-like={len(components)}")
-    if not components:
+    components = sort_row_major(components)
+    print(f"{sheet.stem}: connected-components parsed={parsed}, character-like={len(components)}")
+
+    if len(components) < FRAME_COUNT:
         debug_mask = sheet.parent / f"{sheet.stem}-debug-mask.png"
         shutil.copyfile(mask, debug_mask)
         raise RuntimeError(
-            f"no sprite-like regions detected in {sheet}; debug mask written to {debug_mask}"
+            f"only {len(components)} character-like regions detected in {sheet}; "
+            f"need {FRAME_COUNT}. Debug mask written to {debug_mask}"
         )
-    return transparent, sort_row_major(components)
+
+    return transparent, components
+
+
+def save_selection_preview(sheet, selected, output):
+    image = Image.open(sheet).convert("RGB")
+    draw = ImageDraw.Draw(image)
+    for index, box in enumerate(selected):
+        x0 = box["x"]
+        y0 = box["y"]
+        x1 = x0 + box["w"] - 1
+        y1 = y0 + box["h"] - 1
+        draw.rectangle((x0, y0, x1, y1), outline=(255, 0, 255), width=1)
+        draw.text((x0, max(0, y0 - 9)), str(index), fill=(255, 0, 255))
+    image.save(output)
 
 
 def extract_frames(magick, sheet, player, frames_dir, work_dir):
     transparent, components = detect_sprite_regions(magick, sheet, work_dir)
     selected = components[:FRAME_COUNT]
 
-    if len(selected) < FRAME_COUNT:
-        print(
-            f"warning: detected only {len(selected)} regions for {player}; cycling them to fill {FRAME_COUNT}",
-            file=sys.stderr,
-        )
-        selected = [selected[index % len(selected)] for index in range(FRAME_COUNT)]
-    elif len(components) > FRAME_COUNT:
-        print(
-            f"{player}: detected {len(components)} sprite-like regions; "
-            f"using the first {FRAME_COUNT} in row-major order"
-        )
-
     output_dir = frames_dir / player
     output_dir.mkdir(parents=True, exist_ok=True)
+    save_selection_preview(sheet, selected, sheet.parent / f"{player}-selection.png")
+
     for index, box in enumerate(selected):
         geometry = f"{box['w']}x{box['h']}+{box['x']}+{box['y']}"
         output = output_dir / f"{index:03d}.png"
@@ -224,7 +256,18 @@ def extract_frames(magick, sheet, player, frames_dir, work_dir):
             "-resize", "60x60>", "-background", "none", "-gravity", "south",
             "-extent", f"{FRAME_SIZE}x{FRAME_SIZE}", str(output),
         ])
-    print(f"{player}: wrote {FRAME_COUNT} normalized 64x64 frames")
+
+        # Never silently ship a nearly-flat frame again. Such a frame is a
+        # sheet decoration, not a fighter pose.
+        with Image.open(output).convert("RGBA") as frame:
+            alpha_box = frame.getchannel("A").getbbox()
+            if alpha_box is None or (alpha_box[3] - alpha_box[1]) < 20:
+                raise RuntimeError(
+                    f"invalid fighter frame {player}/{index:03d}: visible height is too small; "
+                    f"inspect assets/generated/raw/{player}-selection.png"
+                )
+
+    print(f"{player}: wrote {FRAME_COUNT} normalized 64x64 fighter frames")
 
 
 def build_indexed_atlas(generated_dir):
