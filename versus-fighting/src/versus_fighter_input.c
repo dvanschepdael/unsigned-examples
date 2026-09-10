@@ -25,6 +25,10 @@ static u8 relative_direction(const VersusFighter *fighter, const UInputControlle
     return 5u;
 }
 
+static u8 history_index(const VersusInputBuffer *buffer, u8 age) {
+    return (u8)((u8)(buffer->head - age) & VERSUS_INPUT_BUFFER_MASK);
+}
+
 void versus_fighter_input_reset(VersusFighter *fighter) {
     if (fighter != NULL) fighter->input_buffer = (VersusInputBuffer){ 0 };
 }
@@ -42,8 +46,7 @@ bool versus_fighter_input_has_qcf(const VersusFighter *fighter) {
     if (fighter == NULL) return false;
 
     for (u8 age = 0u; age < VERSUS_QCF_WINDOW; ++age) {
-        const u8 index = (u8)((fighter->input_buffer.head - age) & VERSUS_INPUT_BUFFER_MASK);
-        const u8 direction = fighter->input_buffer.samples[index].direction;
+        const u8 direction = fighter->input_buffer.samples[history_index(&fighter->input_buffer, age)].direction;
 
         if (!saw_forward && direction == DIR_FORWARD) saw_forward = true;
         else if (saw_forward && !saw_down_forward && direction == DIR_DOWN_FORWARD) saw_down_forward = true;
