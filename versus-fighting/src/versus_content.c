@@ -61,9 +61,9 @@ static const UFrame KO_FRAMES[] = {
     { .tile_offset = TILE(28), .duration = 1, .hurtbox = &HURT_CROUCH },
 };
 
-#define ANIMATION(frames) { \
-    .count = ARRAY_COUNT_U8(frames), \
-    .frames = frames, \
+#define ANIMATION(frame_array) { \
+    .count = ARRAY_COUNT_U8(frame_array), \
+    .frames = frame_array, \
     .hitbox_channel = U_COLLISION_CHANNEL_GAME_0, \
     .hurtbox_channel = U_COLLISION_CHANNEL_GAME_1, \
 }
