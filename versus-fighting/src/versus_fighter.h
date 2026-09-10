@@ -57,7 +57,6 @@ bool versus_fighter_init(
     VersusFighter *fighter,
     const USpriteDefinition *sprite_definition,
     u16 first_sprite,
-    u8 controller_index,
     Vec2 position,
     bool facing_right
 );
