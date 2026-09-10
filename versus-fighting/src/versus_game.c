@@ -95,8 +95,12 @@ void versus_game_tick(void *context) {
     if (input == NULL) return;
 
     if (game->phase == U_NEO_GEO_PHASE_GAME && game->match_started) {
+        /* Hitstop freezes both game-specific logic and Unsigned's actor/animation world tick. */
+        const bool world_was_paused = versus_match_world_paused(&game->match);
         versus_match_update(&game->match, input);
-        unsigned_game_instance_tick(&game->runtime);
+        if (!world_was_paused) {
+            unsigned_game_instance_tick(&game->runtime);
+        }
 
         if (versus_match_finished(&game->match)) {
             unsigned_neo_geo_request_game_over();
