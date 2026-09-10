@@ -23,9 +23,30 @@ typedef enum VersusAnimation {
     VERSUS_ANIM_COUNT,
 } VersusAnimation;
 
+typedef enum VersusAttackKind {
+    VERSUS_ATTACK_NONE = 0,
+    VERSUS_ATTACK_LIGHT,
+    VERSUS_ATTACK_HEAVY,
+    VERSUS_ATTACK_SPECIAL,
+    VERSUS_ATTACK_COUNT,
+} VersusAttackKind;
+
+/* Immutable move tuning. Match logic reads this instead of hard-coding values. */
+typedef struct VersusAttackDefinition {
+    VersusAnimation animation;
+    s16 damage;
+    s16 pushback;
+    u8 hitstun_frames;
+    u8 blockstun_frames;
+    u8 hitstop_frames;
+    u8 block_hitstop_frames;
+} VersusAttackDefinition;
+
 extern const USpriteDefinition VERSUS_FIGHTER_P1_SPRITE;
 extern const USpriteDefinition VERSUS_FIGHTER_P2_SPRITE;
 extern const u16 VERSUS_P1_PALETTE[16];
 extern const u16 VERSUS_P2_PALETTE[16];
+
+const VersusAttackDefinition *versus_content_attack(VersusAttackKind attack);
 
 #endif
