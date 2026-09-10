@@ -20,6 +20,11 @@ typedef enum VersusFighterState {
     VERSUS_FIGHTER_STATE_COUNT,
 } VersusFighterState;
 
+typedef enum VersusFighterAttribute {
+    VERSUS_ATTRIBUTE_HEALTH = 0,
+    VERSUS_ATTRIBUTE_COUNT,
+} VersusFighterAttribute;
+
 typedef struct VersusInputSample {
     u8 direction;
 } VersusInputSample;
@@ -34,8 +39,8 @@ typedef struct VersusFighter {
     UPlayer player;
     UCharacter character;
 
-    /* One attribute is enough for this POC: health. */
-    UGameplayAttribute attributes[1];
+    /* Game-specific values are exposed through UCharacter.attributes. */
+    UGameplayAttribute attributes[VERSUS_ATTRIBUTE_COUNT];
 
     /* Fighter state is backed by Unsigned's UStateGraph. */
     VersusStateMachine states;
