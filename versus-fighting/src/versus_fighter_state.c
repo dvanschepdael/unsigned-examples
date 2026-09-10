@@ -38,8 +38,6 @@ bool versus_fighter_states_init(VersusFighter *fighter) {
     if (fighter == NULL) return false;
     return versus_state_machine_init(
         &fighter->states,
-        fighter->state_nodes,
-        fighter->state_transitions,
         VERSUS_FIGHTER_STATE_COUNT,
         VERSUS_FIGHTER_IDLE,
         fighter_state_enter,
