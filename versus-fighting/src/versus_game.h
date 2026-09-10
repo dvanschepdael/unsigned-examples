@@ -17,13 +17,13 @@ typedef struct VersusGame {
     const UCollisionBox *collision_layer_storage[VERSUS_COLLISION_LAYER_CAPACITY];
     const UCollisionBox *collision_query_storage[VERSUS_COLLISION_QUERY_CAPACITY];
 
-    /* Game-specific state. */
+    /* Game-specific state. The Neo Geo phase is cached because tick() has no phase argument. */
     VersusMatch match;
     UNeoGeoPhase phase;
-    bool match_started;
 } VersusGame;
 
 bool versus_game_initialize(void *context);
+void versus_game_shutdown(void *context);
 void versus_game_start(void *context);
 void versus_game_tick(void *context);
 void versus_game_render(void *context);
