@@ -42,10 +42,8 @@ typedef struct VersusFighter {
     /* Game-specific values are exposed through UCharacter.attributes. */
     UGameplayAttribute attributes[VERSUS_ATTRIBUTE_COUNT];
 
-    /* Fighter state is backed by Unsigned's UStateGraph. */
+    /* Fighter state is backed by Unsigned's UStateGraph through a small shared adapter. */
     VersusStateMachine states;
-    UStateGraphNode state_nodes[VERSUS_FIGHTER_STATE_COUNT];
-    UStateGraphTransition state_transitions[VERSUS_FIGHTER_STATE_COUNT];
 
     /* Only fighting-game-specific runtime remains below. */
     VersusInputBuffer input_buffer;
