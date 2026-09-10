@@ -180,3 +180,7 @@ void versus_match_update(VersusMatch *match, const UInputManager *input) {
 bool versus_match_finished(const VersusMatch *match) {
     return match != NULL && versus_match_phase(match) == VERSUS_MATCH_OVER;
 }
+
+bool versus_match_world_paused(const VersusMatch *match) {
+    return match != NULL && match->hitstop_frames > 0u;
+}
