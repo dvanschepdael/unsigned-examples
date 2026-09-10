@@ -1,4 +1,13 @@
-#include "versus_fighter_internal.h"
+#include "versus_fighter.h"
+
+#include "actor/collision_state.h"
+
+/* Numeric keypad notation used by traditional fighting-game command parsers. */
+enum {
+    DIR_DOWN = 2,
+    DIR_DOWN_FORWARD = 3,
+    DIR_FORWARD = 6,
+};
 
 static s16 clamp_s16(s16 value, s16 minimum, s16 maximum) {
     if (value < minimum) return minimum;
@@ -6,18 +15,139 @@ static s16 clamp_s16(s16 value, s16 minimum, s16 maximum) {
     return value;
 }
 
-static void start_attack(VersusFighter *fighter, VersusAttackKind attack) {
-    fighter->attack = attack;
-    fighter->attack_connected = false;
+/* ------------------------------------------------------------------------- */
+/* State and animation                                                       */
+/* ------------------------------------------------------------------------- */
 
-    /* A directional command is consumed once accepted; old QCF history must not
-       turn a later A press into another special by accident. */
-    if (attack == VERSUS_ATTACK_SPECIAL) {
-        versus_fighter_input_reset(fighter);
-    }
-
-    versus_fighter_set_state(fighter, VERSUS_FIGHTER_ATTACK);
+VersusFighterState versus_fighter_state(const VersusFighter *fighter) {
+    return fighter != NULL
+        ? (VersusFighterState)versus_state_machine_current_index(&fighter->states)
+        : VERSUS_FIGHTER_IDLE;
 }
+
+static void play_animation(VersusFighter *fighter, VersusAnimation animation, UAnimationPlayback playback) {
+    USprite *sprite = &fighter->character.actor.sprite;
+    if (sprite->animation_index != (u8)animation || sprite->state == U_SPRITE_COMPLETED) {
+        (void)unsigned_sprite_play(sprite, (u8)animation, playback);
+    }
+}
+
+static void play_state_animation(VersusFighter *fighter, VersusFighterState state) {
+    switch (state) {
+        case VERSUS_FIGHTER_IDLE:
+            play_animation(fighter, VERSUS_ANIM_IDLE, U_SPRITE_PLAY_LOOP);
+            break;
+        case VERSUS_FIGHTER_WALK:
+            play_animation(fighter, VERSUS_ANIM_WALK, U_SPRITE_PLAY_LOOP);
+            break;
+        case VERSUS_FIGHTER_CROUCH:
+            play_animation(fighter, VERSUS_ANIM_CROUCH, U_SPRITE_PLAY_LOOP);
+            break;
+        case VERSUS_FIGHTER_JUMP:
+            play_animation(fighter, VERSUS_ANIM_JUMP, U_SPRITE_PLAY_LOOP);
+            break;
+        case VERSUS_FIGHTER_BLOCK:
+            play_animation(fighter, VERSUS_ANIM_BLOCK, U_SPRITE_PLAY_LOOP);
+            break;
+        case VERSUS_FIGHTER_HITSTUN:
+            play_animation(fighter, VERSUS_ANIM_HIT, U_SPRITE_PLAY_LOOP);
+            break;
+        case VERSUS_FIGHTER_KO:
+            play_animation(fighter, VERSUS_ANIM_KO, U_SPRITE_PLAY_ONCE);
+            break;
+        case VERSUS_FIGHTER_ATTACK: {
+            const VersusAttackDefinition *attack = versus_content_attack(fighter->attack);
+            if (attack != NULL) {
+                play_animation(fighter, attack->animation, U_SPRITE_PLAY_ONCE);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+static void state_enter(UStateGraph *graph, void *context) {
+    VersusFighter *fighter = context;
+    (void)graph;
+    if (fighter != NULL) {
+        play_state_animation(fighter, versus_fighter_state(fighter));
+    }
+}
+
+static bool states_init(VersusFighter *fighter) {
+    return versus_state_machine_init(
+        &fighter->states,
+        VERSUS_FIGHTER_STATE_COUNT,
+        VERSUS_FIGHTER_IDLE,
+        state_enter,
+        fighter
+    );
+}
+
+static void set_state(VersusFighter *fighter, VersusFighterState state) {
+    if (fighter != NULL && state < VERSUS_FIGHTER_STATE_COUNT) {
+        versus_state_machine_set(&fighter->states, (u8)state);
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Command input                                                             */
+/* ------------------------------------------------------------------------- */
+
+static u8 relative_direction(const VersusFighter *fighter, const UInputController *controller) {
+    const bool up = (controller->state.down & U_INPUT_BUTTON_UP) != 0u;
+    const bool down = (controller->state.down & U_INPUT_BUTTON_DOWN) != 0u;
+    const bool left = (controller->state.down & U_INPUT_BUTTON_LEFT) != 0u;
+    const bool right = (controller->state.down & U_INPUT_BUTTON_RIGHT) != 0u;
+    const bool forward = fighter->character.facing_right ? right : left;
+    const bool back = fighter->character.facing_right ? left : right;
+
+    if (down && forward) return 3u;
+    if (down && back) return 1u;
+    if (up && forward) return 9u;
+    if (up && back) return 7u;
+    if (down) return 2u;
+    if (up) return 8u;
+    if (forward) return 6u;
+    if (back) return 4u;
+    return 5u;
+}
+
+static u8 history_index(const VersusInputBuffer *buffer, u8 age) {
+    return (u8)((u8)(buffer->head - age) & VERSUS_INPUT_BUFFER_MASK);
+}
+
+static void input_reset(VersusFighter *fighter) {
+    fighter->input_buffer = (VersusInputBuffer){ 0 };
+}
+
+static void input_push(VersusFighter *fighter, const UInputController *controller) {
+    fighter->input_buffer.head = (u8)((fighter->input_buffer.head + 1u) & VERSUS_INPUT_BUFFER_MASK);
+    fighter->input_buffer.samples[fighter->input_buffer.head].direction = relative_direction(fighter, controller);
+}
+
+static bool input_has_qcf(const VersusFighter *fighter) {
+    bool saw_forward = false;
+    bool saw_down_forward = false;
+
+    for (u8 age = 0u; age < VERSUS_QCF_WINDOW; ++age) {
+        const u8 direction = fighter->input_buffer.samples[history_index(&fighter->input_buffer, age)].direction;
+
+        if (!saw_forward && direction == DIR_FORWARD) {
+            saw_forward = true;
+        } else if (saw_forward && !saw_down_forward && direction == DIR_DOWN_FORWARD) {
+            saw_down_forward = true;
+        } else if (saw_down_forward && direction == DIR_DOWN) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Fighter lifecycle                                                         */
+/* ------------------------------------------------------------------------- */
 
 bool versus_fighter_init(
     VersusFighter *fighter,
@@ -30,7 +160,6 @@ bool versus_fighter_init(
     *fighter = (VersusFighter){ 0 };
 
     fighter->player.character = &fighter->character;
-
     fighter->character.attributes = (UGameplayAttributeContainer){
         .count = VERSUS_ATTRIBUTE_COUNT,
         .capacity = VERSUS_ATTRIBUTE_COUNT,
@@ -47,7 +176,7 @@ bool versus_fighter_init(
         .y = VERSUS_SPRITE_ANCHOR_Y,
     };
 
-    if (!versus_fighter_states_init(fighter)) return false;
+    if (!states_init(fighter)) return false;
 
     versus_fighter_reset(fighter, position, facing_right);
     return true;
@@ -67,10 +196,10 @@ void versus_fighter_reset(VersusFighter *fighter, Vec2 position, bool facing_rig
     fighter->stun_frames = 0u;
     fighter->attack_connected = false;
     fighter->attributes[VERSUS_ATTRIBUTE_HEALTH].current_value = VERSUS_MAX_HEALTH;
-    versus_fighter_input_reset(fighter);
+    input_reset(fighter);
 
     unsigned_sprite_set_flip_x(&actor->sprite, !facing_right);
-    versus_fighter_set_state(fighter, VERSUS_FIGHTER_IDLE);
+    set_state(fighter, VERSUS_FIGHTER_IDLE);
     (void)unsigned_sprite_play(&actor->sprite, VERSUS_ANIM_IDLE, U_SPRITE_PLAY_LOOP);
 }
 
@@ -95,11 +224,27 @@ static bool state_can_block(VersusFighterState state) {
 bool versus_fighter_is_blocking(const VersusFighter *fighter, const UInputController *controller) {
     if (fighter == NULL || controller == NULL) return false;
 
-    const VersusFighterState state = versus_fighter_state(fighter);
-    if (!state_can_block(state)) return false;
+    if (!state_can_block(versus_fighter_state(fighter))) return false;
 
     const UInputMask back = fighter->character.facing_right ? U_INPUT_BUTTON_LEFT : U_INPUT_BUTTON_RIGHT;
     return (controller->state.down & back) != 0u;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Per-frame behavior                                                        */
+/* ------------------------------------------------------------------------- */
+
+static void start_attack(VersusFighter *fighter, VersusAttackKind attack) {
+    fighter->attack = attack;
+    fighter->attack_connected = false;
+
+    /* Consume a directional command once accepted so stale history cannot
+       trigger another special on a later A press. */
+    if (attack == VERSUS_ATTACK_SPECIAL) {
+        input_reset(fighter);
+    }
+
+    set_state(fighter, VERSUS_FIGHTER_ATTACK);
 }
 
 static void update_stun(VersusFighter *fighter) {
@@ -114,7 +259,7 @@ static void update_stun(VersusFighter *fighter) {
     fighter->velocity.x = 0;
 
     if (fighter->stun_frames == 0u) {
-        versus_fighter_set_state(fighter, VERSUS_FIGHTER_IDLE);
+        set_state(fighter, VERSUS_FIGHTER_IDLE);
     }
 }
 
@@ -132,17 +277,17 @@ static void update_jump(VersusFighter *fighter) {
     if (actor->position.y >= VERSUS_GROUND_Y) {
         actor->position.y = VERSUS_GROUND_Y;
         fighter->velocity = (Vec2){ 0 };
-        versus_fighter_set_state(fighter, VERSUS_FIGHTER_IDLE);
+        set_state(fighter, VERSUS_FIGHTER_IDLE);
     }
 }
 
 static void update_ground_controls(VersusFighter *fighter, const UInputController *controller) {
     if (versus_fighter_is_blocking(fighter, controller)) {
-        versus_fighter_set_state(fighter, VERSUS_FIGHTER_BLOCK);
+        set_state(fighter, VERSUS_FIGHTER_BLOCK);
         return;
     }
 
-    if ((controller->state.pressed & U_INPUT_BUTTON_A) != 0u && versus_fighter_input_has_qcf(fighter)) {
+    if ((controller->state.pressed & U_INPUT_BUTTON_A) != 0u && input_has_qcf(fighter)) {
         start_attack(fighter, VERSUS_ATTACK_SPECIAL);
         return;
     }
@@ -158,11 +303,11 @@ static void update_ground_controls(VersusFighter *fighter, const UInputControlle
         fighter->velocity.y = VERSUS_JUMP_SPEED;
         fighter->velocity.x = (controller->state.down & U_INPUT_BUTTON_RIGHT) ? VERSUS_JUMP_HORIZONTAL_SPEED :
                               (controller->state.down & U_INPUT_BUTTON_LEFT) ? -VERSUS_JUMP_HORIZONTAL_SPEED : 0;
-        versus_fighter_set_state(fighter, VERSUS_FIGHTER_JUMP);
+        set_state(fighter, VERSUS_FIGHTER_JUMP);
         return;
     }
     if ((controller->state.down & U_INPUT_BUTTON_DOWN) != 0u) {
-        versus_fighter_set_state(fighter, VERSUS_FIGHTER_CROUCH);
+        set_state(fighter, VERSUS_FIGHTER_CROUCH);
         return;
     }
 
@@ -175,13 +320,13 @@ static void update_ground_controls(VersusFighter *fighter, const UInputControlle
         VERSUS_STAGE_LEFT,
         VERSUS_STAGE_RIGHT
     );
-    versus_fighter_set_state(fighter, dx == 0 ? VERSUS_FIGHTER_IDLE : VERSUS_FIGHTER_WALK);
+    set_state(fighter, dx == 0 ? VERSUS_FIGHTER_IDLE : VERSUS_FIGHTER_WALK);
 }
 
 void versus_fighter_update(VersusFighter *fighter, const UInputController *controller, bool controls_enabled) {
     if (fighter == NULL || controller == NULL) return;
 
-    versus_fighter_input_push(fighter, controller);
+    input_push(fighter, controller);
 
     const VersusFighterState state = versus_fighter_state(fighter);
     if (state == VERSUS_FIGHTER_KO) return;
@@ -194,7 +339,7 @@ void versus_fighter_update(VersusFighter *fighter, const UInputController *contr
     if (state == VERSUS_FIGHTER_ATTACK) {
         if (fighter->character.actor.sprite.state == U_SPRITE_COMPLETED) {
             fighter->attack = VERSUS_ATTACK_NONE;
-            versus_fighter_set_state(fighter, VERSUS_FIGHTER_IDLE);
+            set_state(fighter, VERSUS_FIGHTER_IDLE);
         }
         return;
     }
@@ -205,12 +350,16 @@ void versus_fighter_update(VersusFighter *fighter, const UInputController *contr
     }
 
     if (!controls_enabled) {
-        versus_fighter_set_state(fighter, VERSUS_FIGHTER_IDLE);
+        set_state(fighter, VERSUS_FIGHTER_IDLE);
         return;
     }
 
     update_ground_controls(fighter, controller);
 }
+
+/* ------------------------------------------------------------------------- */
+/* Combat reactions                                                          */
+/* ------------------------------------------------------------------------- */
 
 void versus_fighter_apply_hit(VersusFighter *fighter, const VersusAttackDefinition *attack, s16 direction) {
     if (fighter == NULL || attack == NULL || versus_fighter_state(fighter) == VERSUS_FIGHTER_KO) return;
@@ -222,7 +371,7 @@ void versus_fighter_apply_hit(VersusFighter *fighter, const VersusAttackDefiniti
 
     fighter->velocity.x = (s16)(direction * attack->pushback);
     fighter->stun_frames = attack->hitstun_frames;
-    versus_fighter_set_state(
+    set_state(
         fighter,
         health->current_value == 0 ? VERSUS_FIGHTER_KO : VERSUS_FIGHTER_HITSTUN
     );
@@ -233,7 +382,7 @@ void versus_fighter_apply_block(VersusFighter *fighter, const VersusAttackDefini
 
     fighter->velocity.x = (s16)(direction * attack->pushback);
     fighter->stun_frames = attack->blockstun_frames;
-    versus_fighter_set_state(fighter, VERSUS_FIGHTER_BLOCK);
+    set_state(fighter, VERSUS_FIGHTER_BLOCK);
 }
 
 s16 versus_fighter_health(const VersusFighter *fighter) {
