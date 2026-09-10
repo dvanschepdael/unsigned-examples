@@ -1,6 +1,7 @@
 #include "versus_arena.h"
 
 #include "actor/player_pool.h"
+#include "display/sprite/limits.h"
 #include "level/level_actor.h"
 #include "level/level_runtime.h"
 
@@ -17,12 +18,15 @@ static bool arena_load(ULevel *level, const ULevelDefinition *definition, void *
     players = unsigned_level_player_pool(level);
     if (players == NULL) return false;
 
+    const u16 p1_first_sprite = UNSIGNED_SPRITE_FIRST;
+    const u16 p2_first_sprite = (u16)(p1_first_sprite + VERSUS_SPRITE_WIDTH_TILES);
+
     if (!versus_fighter_init(
             &match->fighters[0],
             &VERSUS_FIGHTER_P1_SPRITE,
-            VERSUS_PLAYER_1_FIRST_SPRITE,
+            p1_first_sprite,
             0u,
-            (Vec2){ VERSUS_PLAYER_1_START_X, VERSUS_GROUND_Y },
+            (Vec2){ .x = VERSUS_PLAYER_1_START_X, .y = VERSUS_GROUND_Y },
             true)) {
         return false;
     }
@@ -30,9 +34,9 @@ static bool arena_load(ULevel *level, const ULevelDefinition *definition, void *
     if (!versus_fighter_init(
             &match->fighters[1],
             &VERSUS_FIGHTER_P2_SPRITE,
-            VERSUS_PLAYER_2_FIRST_SPRITE,
+            p2_first_sprite,
             1u,
-            (Vec2){ VERSUS_PLAYER_2_START_X, VERSUS_GROUND_Y },
+            (Vec2){ .x = VERSUS_PLAYER_2_START_X, .y = VERSUS_GROUND_Y },
             false)) {
         return false;
     }
@@ -47,6 +51,7 @@ static void arena_resolve_hits(ULevel *level, const ULevelDefinition *definition
     (void)definition;
 
     if (level == NULL || match == NULL) return;
+
     for (u16 i = 0u; i < level->collision.hits.count; ++i) {
         UCollisionHit *hit = &level->collision.hits.instances[i];
         versus_match_resolve_hit(match, hit->attacker, hit->target);
