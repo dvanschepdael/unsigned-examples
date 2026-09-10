@@ -80,11 +80,18 @@ void versus_fighter_face_opponent(VersusFighter *fighter, const VersusFighter *o
     );
 }
 
+static bool state_can_block(VersusFighterState state) {
+    return state == VERSUS_FIGHTER_IDLE ||
+           state == VERSUS_FIGHTER_WALK ||
+           state == VERSUS_FIGHTER_CROUCH ||
+           state == VERSUS_FIGHTER_BLOCK;
+}
+
 bool versus_fighter_is_blocking(const VersusFighter *fighter, const UInputController *controller) {
     if (fighter == NULL || controller == NULL) return false;
 
     const VersusFighterState state = versus_fighter_state(fighter);
-    if (state == VERSUS_FIGHTER_KO || state == VERSUS_FIGHTER_HITSTUN) return false;
+    if (!state_can_block(state)) return false;
 
     const UInputMask back = fighter->character.facing_right ? U_INPUT_BUTTON_LEFT : U_INPUT_BUTTON_RIGHT;
     return (controller->state.down & back) != 0u;
