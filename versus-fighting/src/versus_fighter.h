@@ -22,7 +22,6 @@ typedef enum VersusFighterState {
 
 typedef struct VersusInputSample {
     u8 direction;
-    UInputMask pressed;
 } VersusInputSample;
 
 typedef struct VersusInputBuffer {
