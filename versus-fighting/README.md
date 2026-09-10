@@ -55,9 +55,7 @@ There is no duplicate position, sprite, health or current-state field. `UActor.p
 | `src/versus_config.h` | Small tunable values: health, timings, stage limits, movement speeds and fixed capacities. |
 | `src/versus_arena.*` | The `ULevelDefinition`. Creates/reserves the two players and forwards Unsigned collision hits to the match rules. |
 | `src/versus_match.*` | Round and match rules only: intro/fight/outro flow, timer, score, pushbox separation, damage/block decision and hitstop. |
-| `src/versus_fighter.c` | One fighter's gameplay behavior: movement, attacks, jump, stun and reactions. |
-| `src/versus_fighter_state.c` | Maps fighter states to animations and connects them to `UStateGraph`. |
-| `src/versus_fighter_input.c` | Fighting-game command history and QCF recognition only. |
+| `src/versus_fighter.*` | Complete behavior of one fighter: state graph, animation selection, command history/QCF recognition, movement, attacks, jump, stun and reactions. |
 | `src/versus_state.*` | Tiny common adapter that removes repeated boilerplate for simple enum-like `UStateGraph` graphs. |
 | `src/versus_content.*` | Immutable content: animations, frame timings, hitboxes/hurtboxes, palettes and attack tuning. |
 | `src/versus_hud.*` | FIX-layer presentation only. It reads match/fighter state and does not own gameplay rules. |
@@ -70,10 +68,8 @@ For a beginner, read the example in this order:
 2. `versus_game.c` -- see how one `UGameInstance` is configured and ticked.
 3. `versus_arena.c` -- see how a `ULevelDefinition` creates players and receives collision results.
 4. `versus_match.c` -- see the rules of one versus match.
-5. `versus_fighter.c` -- see how one fighter reacts to input and game events.
-6. `versus_fighter_state.c` -- see how gameplay states select animations through `UStateGraph`.
-7. `versus_fighter_input.c` -- see the small directional command buffer used for QCF+A.
-8. `versus_content.c` -- tune animation frames, collision boxes and attack properties without changing the rules.
+5. `versus_fighter.c` -- see one fighter end-to-end: states, animations, input commands, movement and combat reactions.
+6. `versus_content.c` -- tune animation frames, collision boxes and attack properties without changing the rules.
 
 This order goes from composition to rules to implementation details.
 
@@ -124,6 +120,8 @@ Two simple state machines use Unsigned `UStateGraph`:
 
 The active state is always derived from `UStateGraph.current`; there is no second enum field that could become desynchronized.
 
+For readability, all fighter-specific state handling remains in `versus_fighter.c` instead of being split across several tiny implementation files. The file is organized into sections: state/animation, command input, lifecycle, per-frame behavior and combat reactions.
+
 ## Content-driven attacks
 
 Attack behavior is described in `VersusAttackDefinition` rather than spread through match logic. Each attack defines:
@@ -138,7 +136,7 @@ Attack behavior is described in `VersusAttackDefinition` rather than spread thro
 
 The active frames themselves remain authored in the corresponding `UFrame` arrays through their hitboxes. This keeps move data separate from move execution.
 
-The QCF command buffer is intentionally custom. Unsigned input/ability bindings are appropriate for ordinary button triggers, while a fighting-game directional sequence needs ordered input history. Keeping all fighting commands in one small module is clearer than splitting one command grammar between two systems.
+The QCF command buffer is intentionally custom. Unsigned input/ability bindings are appropriate for ordinary button triggers, while a fighting-game directional sequence needs ordered input history. The parser remains a small private section inside `versus_fighter.c`, keeping the whole fighter behavior visible in one place for a beginner.
 
 ## Controls
 
