@@ -25,7 +25,6 @@ static bool arena_load(ULevel *level, const ULevelDefinition *definition, void *
             &match->fighters[0],
             &VERSUS_FIGHTER_P1_SPRITE,
             p1_first_sprite,
-            0u,
             (Vec2){ .x = VERSUS_PLAYER_1_START_X, .y = VERSUS_GROUND_Y },
             true)) {
         return false;
@@ -35,12 +34,12 @@ static bool arena_load(ULevel *level, const ULevelDefinition *definition, void *
             &match->fighters[1],
             &VERSUS_FIGHTER_P2_SPRITE,
             p2_first_sprite,
-            1u,
             (Vec2){ .x = VERSUS_PLAYER_2_START_X, .y = VERSUS_GROUND_Y },
             false)) {
         return false;
     }
 
+    /* Player-pool reservation owns controller routing in Unsigned. */
     if (unsigned_player_pool_reserve(players, &match->fighters[0].player, 0u) == NULL) return false;
     if (unsigned_player_pool_reserve(players, &match->fighters[1].player, 1u) == NULL) return false;
     return true;
