@@ -6,7 +6,7 @@ static int run_game(bool mvs_title) {
     VersusGame game = { 0 };
     const UNeoGeoRuntimeDefinition runtime = {
         .context = &game,
-        .input = &game.input,
+        .input = &game.runtime.input,
         .initialize = versus_game_initialize,
         .start_game = versus_game_start,
         .tick = versus_game_tick,
