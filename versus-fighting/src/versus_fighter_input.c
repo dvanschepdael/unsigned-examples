@@ -32,7 +32,7 @@ void versus_fighter_input_reset(VersusFighter *fighter) {
 void versus_fighter_input_push(VersusFighter *fighter, const UInputController *controller) {
     if (fighter == NULL || controller == NULL) return;
 
-    fighter->input_buffer.head = (u8)((fighter->input_buffer.head + 1u) & (VERSUS_INPUT_BUFFER_CAPACITY - 1u));
+    fighter->input_buffer.head = (u8)((fighter->input_buffer.head + 1u) & VERSUS_INPUT_BUFFER_MASK);
     fighter->input_buffer.samples[fighter->input_buffer.head].direction = relative_direction(fighter, controller);
 }
 
@@ -42,7 +42,7 @@ bool versus_fighter_input_has_qcf(const VersusFighter *fighter) {
     if (fighter == NULL) return false;
 
     for (u8 age = 0u; age < VERSUS_QCF_WINDOW; ++age) {
-        const u8 index = (u8)((fighter->input_buffer.head - age) & (VERSUS_INPUT_BUFFER_CAPACITY - 1u));
+        const u8 index = (u8)((fighter->input_buffer.head - age) & VERSUS_INPUT_BUFFER_MASK);
         const u8 direction = fighter->input_buffer.samples[index].direction;
 
         if (!saw_forward && direction == DIR_FORWARD) saw_forward = true;
