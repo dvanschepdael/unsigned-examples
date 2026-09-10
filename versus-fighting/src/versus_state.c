@@ -13,7 +13,10 @@ bool versus_state_machine_init(
         return false;
     }
 
-    *machine = (VersusStateMachine){ 0 };
+    *machine = (VersusStateMachine){
+        .nodes = nodes,
+        .state_count = state_count,
+    };
     machine->children = (UStateGraphNodeContainer){
         .count = state_count,
         .capacity = state_count,
@@ -41,21 +44,16 @@ bool versus_state_machine_init(
 }
 
 void versus_state_machine_set(VersusStateMachine *machine, u8 state) {
-    if (machine == NULL || machine->events.instances == NULL || state >= machine->events.count) {
-        return;
-    }
-    if (machine->graph.current == machine->events.instances[state].target) {
-        return;
-    }
+    if (machine == NULL || state >= machine->state_count) return;
+    if (machine->graph.current == &machine->nodes[state]) return;
     unsigned_state_graph_send_event(&machine->graph, (UEvent)state);
 }
 
-const UStateGraphNode *versus_state_machine_current(const VersusStateMachine *machine) {
-    return machine != NULL ? machine->graph.current : NULL;
-}
+u8 versus_state_machine_current_index(const VersusStateMachine *machine) {
+    if (machine == NULL || machine->graph.current == NULL || machine->nodes == NULL) return 0u;
 
-void versus_state_machine_tick(VersusStateMachine *machine) {
-    if (machine != NULL) {
-        unsigned_state_graph_tick(&machine->graph);
+    for (u8 i = 0u; i < machine->state_count; ++i) {
+        if (machine->graph.current == &machine->nodes[i]) return i;
     }
+    return 0u;
 }
