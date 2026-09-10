@@ -56,9 +56,14 @@ bool versus_game_initialize(void *context) {
     load_fix_palette();
     unsigned_sprite_palette_load(1u, VERSUS_P1_PALETTE);
     unsigned_sprite_palette_load(2u, VERSUS_P2_PALETTE);
-
-    game->match_started = false;
     return true;
+}
+
+void versus_game_shutdown(void *context) {
+    VersusGame *game = context;
+    if (game != NULL) {
+        unsigned_game_instance_destroy(&game->runtime);
+    }
 }
 
 void versus_game_start(void *context) {
@@ -66,7 +71,6 @@ void versus_game_start(void *context) {
     if (game == NULL) return;
 
     versus_match_start(&game->match);
-    game->match_started = true;
     versus_hud_clear();
 }
 
@@ -94,7 +98,7 @@ void versus_game_tick(void *context) {
     UInputManager *input = unsigned_game_instance_input(&game->runtime);
     if (input == NULL) return;
 
-    if (game->phase == U_NEO_GEO_PHASE_GAME && game->match_started) {
+    if (game->phase == U_NEO_GEO_PHASE_GAME) {
         /* Hitstop freezes both game-specific logic and Unsigned's actor/animation world tick. */
         const bool world_was_paused = versus_match_world_paused(&game->match);
         versus_match_update(&game->match, input);
@@ -113,7 +117,7 @@ void versus_game_tick(void *context) {
 
 void versus_game_render(void *context) {
     VersusGame *game = context;
-    if (game == NULL || game->phase != U_NEO_GEO_PHASE_GAME || !game->match_started) return;
+    if (game == NULL || game->phase != U_NEO_GEO_PHASE_GAME) return;
 
     unsigned_game_instance_render(&game->runtime);
     versus_hud_render(&game->match);
