@@ -1,22 +1,17 @@
 #include "versus_match.h"
 
-static VersusRoundPhase phase_from_node(const VersusMatch *match, const UStateGraphNode *node) {
-    for (u8 i = 0u; i < VERSUS_ROUND_PHASE_COUNT; ++i) {
-        if (node == &match->state_nodes[i]) return (VersusRoundPhase)i;
-    }
-    return VERSUS_ROUND_INTRO;
-}
-
 VersusRoundPhase versus_match_phase(const VersusMatch *match) {
-    if (match == NULL) return VERSUS_ROUND_INTRO;
-    return phase_from_node(match, versus_state_machine_current(&match->states));
+    return match != NULL
+        ? (VersusRoundPhase)versus_state_machine_current_index(&match->states)
+        : VERSUS_ROUND_INTRO;
 }
 
 static void match_state_enter(UStateGraph *graph, void *context) {
     VersusMatch *match = context;
-    if (match == NULL || graph == NULL) return;
+    (void)graph;
+    if (match == NULL) return;
 
-    switch (phase_from_node(match, graph->current)) {
+    switch (versus_match_phase(match)) {
         case VERSUS_ROUND_INTRO:
             match->phase_frames = (u16)(match->refresh_rate * VERSUS_INTRO_SECONDS);
             break;
@@ -36,8 +31,16 @@ static void set_phase(VersusMatch *match, VersusRoundPhase phase) {
 }
 
 static void begin_round(VersusMatch *match) {
-    versus_fighter_reset(&match->fighters[0], (Vec2){ VERSUS_PLAYER_1_START_X, VERSUS_GROUND_Y }, true);
-    versus_fighter_reset(&match->fighters[1], (Vec2){ VERSUS_PLAYER_2_START_X, VERSUS_GROUND_Y }, false);
+    versus_fighter_reset(
+        &match->fighters[0],
+        (Vec2){ .x = VERSUS_PLAYER_1_START_X, .y = VERSUS_GROUND_Y },
+        true
+    );
+    versus_fighter_reset(
+        &match->fighters[1],
+        (Vec2){ .x = VERSUS_PLAYER_2_START_X, .y = VERSUS_GROUND_Y },
+        false
+    );
 
     match->round_frames_remaining = (u16)(match->refresh_rate * VERSUS_ROUND_SECONDS);
     match->hitstop_frames = 0u;
@@ -67,7 +70,10 @@ bool versus_match_init(VersusMatch *match, u16 refresh_rate) {
 
 void versus_match_start(VersusMatch *match) {
     if (match == NULL) return;
-    for (u8 i = 0u; i < VERSUS_PLAYER_COUNT; ++i) match->rounds_won[i] = 0u;
+
+    for (u8 i = 0u; i < VERSUS_PLAYER_COUNT; ++i) {
+        match->rounds_won[i] = 0u;
+    }
     match->round_number = 0u;
     begin_round(match);
 }
@@ -75,21 +81,22 @@ void versus_match_start(VersusMatch *match) {
 static void resolve_pushboxes(VersusMatch *match) {
     UActor *a = versus_fighter_actor(&match->fighters[0]);
     UActor *b = versus_fighter_actor(&match->fighters[1]);
-    UActor *left = a;
-    UActor *right = b;
-
     if (a == NULL || b == NULL) return;
-    if (a->position.x > b->position.x) {
-        left = b;
-        right = a;
-    }
 
+    UActor *left = a->position.x <= b->position.x ? a : b;
+    UActor *right = left == a ? b : a;
     const s16 distance = (s16)(right->position.x - left->position.x);
     if (distance >= VERSUS_PUSHBOX_DISTANCE) return;
 
-    const s16 correction = (s16)((VERSUS_PUSHBOX_DISTANCE - distance + 1) / 2);
-    left->position.x = (s16)(left->position.x - correction);
-    right->position.x = (s16)(right->position.x + correction);
+    const s16 overlap = (s16)(VERSUS_PUSHBOX_DISTANCE - distance);
+    const s16 left_move = (s16)(overlap / 2);
+    const s16 right_move = (s16)(overlap - left_move);
+
+    left->position.x = (s16)(left->position.x - left_move);
+    right->position.x = (s16)(right->position.x + right_move);
+
+    if (left->position.x < VERSUS_STAGE_LEFT) left->position.x = VERSUS_STAGE_LEFT;
+    if (right->position.x > VERSUS_STAGE_RIGHT) right->position.x = VERSUS_STAGE_RIGHT;
 }
 
 static void finish_round(VersusMatch *match) {
@@ -97,14 +104,19 @@ static void finish_round(VersusMatch *match) {
     const s16 p2_health = versus_fighter_health(&match->fighters[1]);
 
     match->winner = p1_health == p2_health ? 0xffu : (p1_health > p2_health ? 0u : 1u);
-    if (match->winner < VERSUS_PLAYER_COUNT) ++match->rounds_won[match->winner];
+    if (match->winner < VERSUS_PLAYER_COUNT) {
+        ++match->rounds_won[match->winner];
+    }
     set_phase(match, VERSUS_ROUND_OUTRO);
 }
 
 static VersusFighter *fighter_from_actor(VersusMatch *match, UActor *actor) {
     if (match == NULL || actor == NULL) return NULL;
+
     for (u8 i = 0u; i < VERSUS_PLAYER_COUNT; ++i) {
-        if (actor == versus_fighter_actor(&match->fighters[i])) return &match->fighters[i];
+        if (actor == versus_fighter_actor(&match->fighters[i])) {
+            return &match->fighters[i];
+        }
     }
     return NULL;
 }
@@ -120,6 +132,7 @@ void versus_match_resolve_hit(VersusMatch *match, UActor *attacker_actor, UActor
     if (attack == NULL) return;
 
     attacker->attack_connected = true;
+
     const s16 direction = attacker->character.facing_right ? 1 : -1;
     const UInputController *defender_input = &match->frame_input->players[defender->player.controller_index];
 
