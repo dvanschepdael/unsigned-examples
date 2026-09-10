@@ -13,7 +13,6 @@ static int run_game(bool mvs_title) {
         .tick = versus_game_tick,
         .render = versus_game_render,
         .enter_phase = versus_game_enter_phase,
-        .render_phase = versus_game_render_phase,
     };
 
     return mvs_title
