@@ -12,7 +12,7 @@ import urllib.request
 from collections import Counter
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 ASSETS = (
     {
@@ -31,12 +31,19 @@ ASSETS = (
 
 FRAME_COUNT = 29
 FRAME_SIZE = 64
-MAX_SOURCE_FRAME_SIZE = 128
+MAX_SOURCE_FRAME_SIZE = 160
 USER_AGENT = "unsigned-examples educational asset builder/1.0 (+https://github.com/dvanschepdael/unsigned-examples)"
 
 
 def run(command):
     subprocess.run(command, check=True, text=True)
+
+
+def pixel_data(image):
+    getter = getattr(image, "get_flattened_data", None)
+    if getter is not None:
+        return list(getter())
+    return list(image.getdata())
 
 
 def request_bytes(url, referer=None):
@@ -122,8 +129,7 @@ def longest_horizontal_run(image, color):
             pixel = pixels[x, y]
             if pixel[3] != 0 and pixel[:3] == color:
                 current += 1
-                if current > longest:
-                    longest = current
+                longest = max(longest, current)
             else:
                 current = 0
     return longest
@@ -139,38 +145,77 @@ def longest_vertical_run(image, color):
             pixel = pixels[x, y]
             if pixel[3] != 0 and pixel[:3] == color:
                 current += 1
-                if current > longest:
-                    longest = current
+                longest = max(longest, current)
             else:
                 current = 0
     return longest
 
 
-def detect_background_colors(image):
-    """Find sheet decoration/background colours without knowing the sheet layout.
+def border_color_counts(image):
+    width, height = image.size
+    band = max(2, min(12, min(width, height) // 32))
+    counts = Counter()
+    total = 0
+    pixels = image.load()
 
-    Character sheets use large flat colour fields and separators around many small
-    poses. Those fields create the giant connected components seen in the failed
-    build. A colour is treated as sheet background only when it is both common and
-    forms a long straight run, or when it occupies a corner of the sheet.
+    for y in range(height):
+        for x in range(width):
+            if x >= band and x < width - band and y >= band and y < height - band:
+                continue
+            red, green, blue, alpha = pixels[x, y]
+            if alpha == 0:
+                continue
+            counts[(red, green, blue)] += 1
+            total += 1
+
+    return counts, total
+
+
+def detect_background_colors(image):
+    """Detect flat sheet backgrounds without relying on one specific layout.
+
+    The Spriters Resource sheets are not normalized: some use solid fields,
+    some use several flat colours, and dense sheets may contain only narrow
+    gaps between poses. Background colours are inferred from opaque corners,
+    the outer border, dominant global colours and long straight runs.
     """
     rgba = image.convert("RGBA")
     width, height = rgba.size
-    pixels = list(rgba.getdata())
-    opaque_rgb = [pixel[:3] for pixel in pixels if pixel[3] != 0]
-    counts = Counter(opaque_rgb)
+    pixels = pixel_data(rgba)
+    opaque = [pixel for pixel in pixels if pixel[3] != 0]
+    if not opaque:
+        return set()
 
-    corners = {
-        rgba.getpixel((0, 0))[:3],
-        rgba.getpixel((width - 1, 0))[:3],
-        rgba.getpixel((0, height - 1))[:3],
-        rgba.getpixel((width - 1, height - 1))[:3],
-    }
-    backgrounds = set(corners)
+    counts = Counter(pixel[:3] for pixel in opaque)
+    border_counts, border_total = border_color_counts(rgba)
+    opaque_total = len(opaque)
+    backgrounds = set()
+
+    for x, y in ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)):
+        pixel = rgba.getpixel((x, y))
+        if pixel[3] != 0:
+            backgrounds.add(pixel[:3])
+
+    # Catch checkerboard/striped backgrounds whose individual colour runs are
+    # too short for the old long-run heuristic. A true sheet background tends
+    # to dominate the outer border as well as a meaningful part of the image.
+    if border_total > 0:
+        for color, border_count in border_counts.most_common(16):
+            global_count = counts[color]
+            border_share = border_count / float(border_total)
+            global_share = global_count / float(opaque_total)
+            if border_share >= 0.03 and global_share >= 0.005:
+                backgrounds.add(color)
+
+    # Also catch a dominant field that may not reach every edge because the
+    # author placed a frame or title around the sheet.
+    for color, count in counts.most_common(16):
+        global_share = count / float(opaque_total)
+        if global_share >= 0.12:
+            backgrounds.add(color)
 
     minimum_count = max(128, (width * height) // 1000)
     long_run = max(48, min(width, height) // 7)
-
     for color, count in counts.most_common(32):
         if count < minimum_count:
             break
@@ -188,25 +233,27 @@ def build_foreground_images(sheet, work_dir):
 
     cleaned = source.copy()
     cleaned_pixels = []
-    for red, green, blue, alpha in source.getdata():
+    for red, green, blue, alpha in pixel_data(source):
         if alpha == 0 or (red, green, blue) in background_colors:
             cleaned_pixels.append((red, green, blue, 0))
         else:
             cleaned_pixels.append((red, green, blue, 255))
     cleaned.putdata(cleaned_pixels)
 
-    mask = cleaned.getchannel("A")
-    mask = mask.filter(ImageFilter.MaxFilter(3)).filter(ImageFilter.MinFilter(3))
-    mask = mask.filter(ImageFilter.MaxFilter(5))
+    # Do not dilate the mask. Dense sheets can place two poses only one or two
+    # pixels apart; the previous MaxFilter(5) merged the complete Iori sheet
+    # into a single 796x583 component.
+    mask = cleaned.getchannel("A").point(lambda value: 255 if value else 0)
 
     transparent_path = work_dir / f"{sheet.stem}-transparent.png"
     mask_path = sheet.parent / f"{sheet.stem}-debug-mask.png"
     cleaned.save(transparent_path)
     mask.save(mask_path)
 
+    colors = ", ".join(f"#{r:02x}{g:02x}{b:02x}" for r, g, b in sorted(background_colors))
     print(
-        f"{sheet.stem}: removed {len(background_colors)} sheet background colours; "
-        f"debug mask: {mask_path}"
+        f"{sheet.stem}: removed {len(background_colors)} sheet background colours"
+        f"{(' [' + colors + ']') if colors else ''}; debug mask: {mask_path}"
     )
     return cleaned, mask
 
@@ -238,13 +285,9 @@ def connected_components(mask):
             min_y = min(min_y, y)
             max_y = max(max_y, y)
 
-            x0 = max(0, x - 1)
-            x1 = min(width - 1, x + 1)
-            y0 = max(0, y - 1)
-            y1 = min(height - 1, y + 1)
-            for ny in range(y0, y1 + 1):
+            for ny in range(max(0, y - 1), min(height - 1, y + 1) + 1):
                 row = ny * width
-                for nx in range(x0, x1 + 1):
+                for nx in range(max(0, x - 1), min(width - 1, x + 1) + 1):
                     neighbor = row + nx
                     if not visited[neighbor] and data[neighbor] != 0:
                         visited[neighbor] = 1
@@ -266,13 +309,13 @@ def component_is_plausible(component):
     height = component["h"]
     area = component["area"]
 
-    if width < 8 or height < 18 or area < 70:
+    if width < 8 or height < 18 or area < 60:
         return False
     if width > MAX_SOURCE_FRAME_SIZE or height > MAX_SOURCE_FRAME_SIZE:
         return False
-    if width >= height * 3:
+    if width >= height * 4:
         return False
-    if height >= width * 6:
+    if height >= width * 8:
         return False
     return True
 
@@ -415,8 +458,8 @@ def build_indexed_atlas(generated_dir):
     indexed.putpalette(palette)
 
     alpha = atlas.getchannel("A")
-    qdata = list(quantized.getdata())
-    adata = list(alpha.getdata())
+    qdata = pixel_data(quantized)
+    adata = pixel_data(alpha)
     indexed.putdata([0 if a == 0 else min(15, q + 1) for q, a in zip(qdata, adata)])
     indexed.info["transparency"] = 0
     indexed.save(generated_dir / "fighters.gif", transparency=0)
