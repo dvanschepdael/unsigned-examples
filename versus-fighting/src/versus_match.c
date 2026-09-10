@@ -59,8 +59,6 @@ bool versus_match_init(VersusMatch *match, u16 refresh_rate) {
 
     return versus_state_machine_init(
         &match->states,
-        match->state_nodes,
-        match->state_transitions,
         VERSUS_ROUND_PHASE_COUNT,
         VERSUS_ROUND_INTRO,
         match_state_enter,
