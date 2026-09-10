@@ -4,17 +4,19 @@
 #include "core/state/state_graph.h"
 
 /*
- * Small adapter used by this example for enum-like state machines.
+ * Adapter for the two simple enum-like state machines used by this POC.
  *
- * Unsigned's UStateGraph remains the real state machine. This wrapper only removes
- * the repetitive boilerplate required to build a flat event-driven graph where
- * event N enters state N. Fighter and match flow can therefore share the same setup.
+ * UStateGraph is still the real Unsigned state machine. This helper only builds
+ * a flat event-driven graph where event N enters state N, then exposes the
+ * current enum index. It keeps fighter and match code focused on their rules.
  */
 typedef struct VersusStateMachine {
     UStateGraph graph;
     UStateGraphNode root;
     UStateGraphNodeContainer children;
     UStateGraphTransitionContainer events;
+    const UStateGraphNode *nodes;
+    u8 state_count;
 } VersusStateMachine;
 
 bool versus_state_machine_init(
@@ -28,7 +30,6 @@ bool versus_state_machine_init(
 );
 
 void versus_state_machine_set(VersusStateMachine *machine, u8 state);
-const UStateGraphNode *versus_state_machine_current(const VersusStateMachine *machine);
-void versus_state_machine_tick(VersusStateMachine *machine);
+u8 versus_state_machine_current_index(const VersusStateMachine *machine);
 
 #endif
