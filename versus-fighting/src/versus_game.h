@@ -28,6 +28,5 @@ void versus_game_start(void *context);
 void versus_game_tick(void *context);
 void versus_game_render(void *context);
 void versus_game_enter_phase(void *context, UNeoGeoPhase phase);
-void versus_game_render_phase(void *context, UNeoGeoPhase phase);
 
 #endif
