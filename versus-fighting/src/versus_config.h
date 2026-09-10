@@ -37,10 +37,10 @@ enum {
 
     VERSUS_SPRITE_ANCHOR_X = -32,
     VERSUS_SPRITE_ANCHOR_Y = -64,
-    VERSUS_PLAYER_1_FIRST_SPRITE = 1,
-    VERSUS_PLAYER_2_FIRST_SPRITE = 5,
 
+    /* Power-of-two size keeps command-history wrapping to one cheap mask. */
     VERSUS_INPUT_BUFFER_CAPACITY = 16,
+    VERSUS_INPUT_BUFFER_MASK = VERSUS_INPUT_BUFFER_CAPACITY - 1,
     VERSUS_QCF_WINDOW = 10,
 };
 
