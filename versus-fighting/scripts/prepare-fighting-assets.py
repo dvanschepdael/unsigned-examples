@@ -3,16 +3,16 @@ import argparse
 import html as html_module
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 ASSETS = (
     {
@@ -31,24 +31,12 @@ ASSETS = (
 
 FRAME_COUNT = 29
 FRAME_SIZE = 64
+MAX_SOURCE_FRAME_SIZE = 128
 USER_AGENT = "unsigned-examples educational asset builder/1.0 (+https://github.com/dvanschepdael/unsigned-examples)"
 
 
-def run(command, capture=False):
-    options = {"check": True, "text": True}
-    if capture:
-        options.update(stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    result = subprocess.run(command, **options)
-    return result.stdout if capture else ""
-
-
-def find_magick():
-    candidate = os.environ.get("CONVERT", "magick")
-    if shutil.which(candidate):
-        return candidate
-    if candidate == "magick" and shutil.which("convert"):
-        return "convert"
-    raise SystemExit("ImageMagick is required (expected 'magick', or set CONVERT).")
+def run(command):
+    subprocess.run(command, check=True, text=True)
 
 
 def request_bytes(url, referer=None):
@@ -78,15 +66,14 @@ def candidate_image_urls(page_html, page_url):
     return urls
 
 
-def image_size(magick, path):
-    result = run([magick, str(path), "-format", "%w %h", "info:"], capture=True).strip()
-    width, height = result.split()
-    return int(width), int(height)
+def image_size(path):
+    with Image.open(path) as image:
+        return image.size
 
 
-def download_sheet(magick, asset, raw_dir):
+def download_sheet(asset, raw_dir):
     output = raw_dir / f"{asset['player']}.png"
-    if output.exists() and image_size(magick, output) == asset["size"]:
+    if output.exists() and image_size(output) == asset["size"]:
         print(f"using cached {asset['name']} sheet: {output}")
         return output
 
@@ -110,8 +97,8 @@ def download_sheet(magick, asset, raw_dir):
             temporary_image = Path(temporary) / f"candidate-{index}.png"
             temporary_image.write_bytes(data)
             try:
-                size = image_size(magick, temporary_image)
-            except subprocess.CalledProcessError:
+                size = image_size(temporary_image)
+            except OSError:
                 continue
 
             if size == asset["size"]:
@@ -125,9 +112,178 @@ def download_sheet(magick, asset, raw_dir):
     )
 
 
-COMPONENT_RE = re.compile(
-    r"^\s*\d+:\s+(\d+)x(\d+)\+(\d+)\+(\d+)\s+[^\s]+\s+(\d+)\s+(.+)$"
-)
+def longest_horizontal_run(image, color):
+    pixels = image.load()
+    width, height = image.size
+    longest = 0
+    for y in range(height):
+        current = 0
+        for x in range(width):
+            pixel = pixels[x, y]
+            if pixel[3] != 0 and pixel[:3] == color:
+                current += 1
+                if current > longest:
+                    longest = current
+            else:
+                current = 0
+    return longest
+
+
+def longest_vertical_run(image, color):
+    pixels = image.load()
+    width, height = image.size
+    longest = 0
+    for x in range(width):
+        current = 0
+        for y in range(height):
+            pixel = pixels[x, y]
+            if pixel[3] != 0 and pixel[:3] == color:
+                current += 1
+                if current > longest:
+                    longest = current
+            else:
+                current = 0
+    return longest
+
+
+def detect_background_colors(image):
+    """Find sheet decoration/background colours without knowing the sheet layout.
+
+    Character sheets use large flat colour fields and separators around many small
+    poses. Those fields create the giant connected components seen in the failed
+    build. A colour is treated as sheet background only when it is both common and
+    forms a long straight run, or when it occupies a corner of the sheet.
+    """
+    rgba = image.convert("RGBA")
+    width, height = rgba.size
+    pixels = list(rgba.getdata())
+    opaque_rgb = [pixel[:3] for pixel in pixels if pixel[3] != 0]
+    counts = Counter(opaque_rgb)
+
+    corners = {
+        rgba.getpixel((0, 0))[:3],
+        rgba.getpixel((width - 1, 0))[:3],
+        rgba.getpixel((0, height - 1))[:3],
+        rgba.getpixel((width - 1, height - 1))[:3],
+    }
+    backgrounds = set(corners)
+
+    minimum_count = max(128, (width * height) // 1000)
+    long_run = max(48, min(width, height) // 7)
+
+    for color, count in counts.most_common(32):
+        if count < minimum_count:
+            break
+        if color in backgrounds:
+            continue
+        if longest_horizontal_run(rgba, color) >= long_run or longest_vertical_run(rgba, color) >= long_run:
+            backgrounds.add(color)
+
+    return backgrounds
+
+
+def build_foreground_images(sheet, work_dir):
+    source = Image.open(sheet).convert("RGBA")
+    background_colors = detect_background_colors(source)
+
+    cleaned = source.copy()
+    cleaned_pixels = []
+    for red, green, blue, alpha in source.getdata():
+        if alpha == 0 or (red, green, blue) in background_colors:
+            cleaned_pixels.append((red, green, blue, 0))
+        else:
+            cleaned_pixels.append((red, green, blue, 255))
+    cleaned.putdata(cleaned_pixels)
+
+    mask = cleaned.getchannel("A")
+    mask = mask.filter(ImageFilter.MaxFilter(3)).filter(ImageFilter.MinFilter(3))
+    mask = mask.filter(ImageFilter.MaxFilter(5))
+
+    transparent_path = work_dir / f"{sheet.stem}-transparent.png"
+    mask_path = sheet.parent / f"{sheet.stem}-debug-mask.png"
+    cleaned.save(transparent_path)
+    mask.save(mask_path)
+
+    print(
+        f"{sheet.stem}: removed {len(background_colors)} sheet background colours; "
+        f"debug mask: {mask_path}"
+    )
+    return cleaned, mask
+
+
+def connected_components(mask):
+    image = mask.convert("L")
+    width, height = image.size
+    data = image.tobytes()
+    visited = bytearray(width * height)
+    components = []
+
+    for start in range(width * height):
+        if visited[start] or data[start] == 0:
+            continue
+
+        stack = [start]
+        visited[start] = 1
+        min_x = max_x = start % width
+        min_y = max_y = start // width
+        area = 0
+
+        while stack:
+            index = stack.pop()
+            x = index % width
+            y = index // width
+            area += 1
+            min_x = min(min_x, x)
+            max_x = max(max_x, x)
+            min_y = min(min_y, y)
+            max_y = max(max_y, y)
+
+            x0 = max(0, x - 1)
+            x1 = min(width - 1, x + 1)
+            y0 = max(0, y - 1)
+            y1 = min(height - 1, y + 1)
+            for ny in range(y0, y1 + 1):
+                row = ny * width
+                for nx in range(x0, x1 + 1):
+                    neighbor = row + nx
+                    if not visited[neighbor] and data[neighbor] != 0:
+                        visited[neighbor] = 1
+                        stack.append(neighbor)
+
+        components.append({
+            "x": min_x,
+            "y": min_y,
+            "w": max_x - min_x + 1,
+            "h": max_y - min_y + 1,
+            "area": area,
+        })
+
+    return components
+
+
+def component_is_plausible(component):
+    width = component["w"]
+    height = component["h"]
+    area = component["area"]
+
+    if width < 8 or height < 18 or area < 70:
+        return False
+    if width > MAX_SOURCE_FRAME_SIZE or height > MAX_SOURCE_FRAME_SIZE:
+        return False
+    if width >= height * 3:
+        return False
+    if height >= width * 6:
+        return False
+    return True
+
+
+def component_score(component):
+    width = component["w"]
+    height = component["h"]
+    area = component["area"]
+    aspect = width / float(max(1, height))
+    shape_penalty = abs(aspect - 0.8) * 80.0
+    return float(area) + float(height * 16) - shape_penalty
 
 
 def sort_row_major(components):
@@ -156,117 +312,29 @@ def sort_row_major(components):
     return ordered
 
 
-def component_is_plausible(component, sheet_width, sheet_height):
-    """Reject only obvious sheet decorations.
+def detect_sprite_regions(sheet, work_dir):
+    cleaned, mask = build_foreground_images(sheet, work_dir)
+    parsed = connected_components(mask)
+    candidates = [component for component in parsed if component_is_plausible(component)]
 
-    Do not hard-code fighter dimensions here. Connected-component geometry varies
-    with ImageMagick versions and with how detached pixels in a pose get joined.
-    The semantic 64x64 normalization happens later.
-    """
-    width = component["w"]
-    height = component["h"]
-    area = component["area"]
-
-    # Background / giant sheet regions.
-    if width >= sheet_width * 0.50 or height >= sheet_height * 0.50:
-        return False
-
-    # Tiny text/palette fragments.
-    if width < 6 or height < 10 or area < 50:
-        return False
-
-    # Horizontal separators and palette strips are the failure visible in GnGeo.
-    if width >= height * 4:
-        return False
-
-    return True
-
-
-def component_score(component):
-    """Prefer substantial, character-shaped components without assuming a fixed size."""
-    width = component["w"]
-    height = component["h"]
-    area = component["area"]
-    aspect = width / float(max(1, height))
-
-    # Height and foreground area distinguish poses from labels/strips. Penalize
-    # extreme aspect ratios, but do not reject wide attack poses outright.
-    shape_penalty = abs(aspect - 0.8) * 120.0
-    return float(area) + float(height * 12) - shape_penalty
-
-
-def detect_sprite_regions(magick, sheet, work_dir):
-    sheet_width, sheet_height = image_size(magick, sheet)
-    background = run(
-        [magick, str(sheet), "-format", "%[pixel:p{0,0}]", "info:"], capture=True
-    ).strip()
-    transparent = work_dir / f"{sheet.stem}-transparent.png"
-    mask = work_dir / f"{sheet.stem}-mask.png"
-
-    run([
-        magick, str(sheet), "-alpha", "on", "-fuzz", "2%",
-        "-transparent", background, str(transparent),
-    ])
-    run([
-        magick, str(transparent), "-alpha", "extract", "-threshold", "0",
-        "-morphology", "Close", "Diamond:1",
-        "-morphology", "Dilate", "Diamond:1",
-        str(mask),
-    ])
-
-    verbose = run([
-        magick, str(mask), "-define", "connected-components:verbose=true",
-        "-connected-components", "8", "null:",
-    ], capture=True)
-
-    parsed_components = []
-    for line in verbose.splitlines():
-        match = COMPONENT_RE.match(line)
-        if match is None:
-            continue
-        width, height, x, y, area = (int(match.group(index)) for index in range(1, 6))
-        parsed_components.append({"x": x, "y": y, "w": width, "h": height, "area": area})
-
-    candidates = [
-        component for component in parsed_components
-        if component_is_plausible(component, sheet_width, sheet_height)
-    ]
-
-    # If more regions survive than the POC needs, select the strongest 29 first,
-    # then restore sheet order so the downstream animation mapping is deterministic.
-    if len(candidates) >= FRAME_COUNT:
-        selected_pool = sorted(candidates, key=component_score, reverse=True)[:FRAME_COUNT]
-        candidates = sort_row_major(selected_pool)
-    else:
-        candidates = sort_row_major(candidates)
-
-    print(
-        f"{sheet.stem}: connected-components parsed={len(parsed_components)}, "
-        f"plausible={len(candidates)}"
-    )
+    print(f"{sheet.stem}: foreground components={len(parsed)}, plausible poses={len(candidates)}")
 
     if len(candidates) < FRAME_COUNT:
-        debug_mask = sheet.parent / f"{sheet.stem}-debug-mask.png"
-        shutil.copyfile(mask, debug_mask)
-
-        # Print the component geometry so a build log is enough to diagnose the
-        # next issue; the user should not have to inspect ImageMagick internals.
-        ranked = sorted(parsed_components, key=component_score, reverse=True)
-        print(f"{sheet.stem}: top connected components:", file=sys.stderr)
+        ranked = sorted(parsed, key=component_score, reverse=True)
+        print(f"{sheet.stem}: top foreground components:", file=sys.stderr)
         for component in ranked[:min(40, len(ranked))]:
             print(
-                "  "
-                f"{component['w']}x{component['h']}+{component['x']}+{component['y']} "
+                f"  {component['w']}x{component['h']}+{component['x']}+{component['y']} "
                 f"area={component['area']}",
                 file=sys.stderr,
             )
-
         raise RuntimeError(
-            f"only {len(candidates)} plausible fighter regions detected in {sheet}; "
-            f"need {FRAME_COUNT}. Debug mask written to {debug_mask}"
+            f"only {len(candidates)} plausible fighter poses detected in {sheet}; need {FRAME_COUNT}. "
+            f"Inspect {sheet.parent / (sheet.stem + '-debug-mask.png')}"
         )
 
-    return transparent, candidates
+    selected = sorted(candidates, key=component_score, reverse=True)[:FRAME_COUNT]
+    return cleaned, sort_row_major(selected)
 
 
 def save_selection_preview(sheet, selected, output):
@@ -282,30 +350,40 @@ def save_selection_preview(sheet, selected, output):
     image.save(output)
 
 
-def extract_frames(magick, sheet, player, frames_dir, work_dir):
-    transparent, components = detect_sprite_regions(magick, sheet, work_dir)
-    selected = components[:FRAME_COUNT]
+def normalize_frame(cleaned, box):
+    crop = cleaned.crop((box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"]))
+    alpha_box = crop.getchannel("A").getbbox()
+    if alpha_box is None:
+        raise RuntimeError("selected pose contains no visible pixels")
+    crop = crop.crop(alpha_box)
 
+    if crop.width > 60 or crop.height > 60:
+        scale = min(60.0 / crop.width, 60.0 / crop.height)
+        size = (max(1, int(crop.width * scale)), max(1, int(crop.height * scale)))
+        crop = crop.resize(size, Image.Resampling.NEAREST)
+
+    frame = Image.new("RGBA", (FRAME_SIZE, FRAME_SIZE), (0, 0, 0, 0))
+    x = (FRAME_SIZE - crop.width) // 2
+    y = FRAME_SIZE - crop.height
+    frame.alpha_composite(crop, (x, y))
+    return frame
+
+
+def extract_frames(sheet, player, frames_dir, work_dir):
+    cleaned, selected = detect_sprite_regions(sheet, work_dir)
     output_dir = frames_dir / player
     output_dir.mkdir(parents=True, exist_ok=True)
     save_selection_preview(sheet, selected, sheet.parent / f"{player}-selection.png")
 
     for index, box in enumerate(selected):
-        geometry = f"{box['w']}x{box['h']}+{box['x']}+{box['y']}"
-        output = output_dir / f"{index:03d}.png"
-        run([
-            magick, str(transparent), "-crop", geometry, "+repage",
-            "-resize", "60x60>", "-background", "none", "-gravity", "south",
-            "-extent", f"{FRAME_SIZE}x{FRAME_SIZE}", str(output),
-        ])
-
-        with Image.open(output).convert("RGBA") as frame:
-            alpha_box = frame.getchannel("A").getbbox()
-            if alpha_box is None or (alpha_box[3] - alpha_box[1]) < 20:
-                raise RuntimeError(
-                    f"invalid fighter frame {player}/{index:03d}: visible height is too small; "
-                    f"inspect assets/generated/raw/{player}-selection.png"
-                )
+        frame = normalize_frame(cleaned, box)
+        alpha_box = frame.getchannel("A").getbbox()
+        if alpha_box is None or (alpha_box[3] - alpha_box[1]) < 18:
+            raise RuntimeError(
+                f"invalid fighter frame {player}/{index:03d}; "
+                f"inspect assets/generated/raw/{player}-selection.png"
+            )
+        frame.save(output_dir / f"{index:03d}.png")
 
     print(f"{player}: wrote {FRAME_COUNT} normalized 64x64 fighter frames")
 
@@ -320,7 +398,8 @@ def build_indexed_atlas(generated_dir):
 
     atlas = Image.new("RGBA", (FRAME_SIZE, FRAME_SIZE * len(frame_paths)), (0, 0, 0, 0))
     for index, frame_path in enumerate(frame_paths):
-        frame = Image.open(frame_path).convert("RGBA")
+        with Image.open(frame_path) as source:
+            frame = source.convert("RGBA")
         atlas.alpha_composite(frame, (0, index * FRAME_SIZE))
 
     atlas.save(generated_dir / "fighters.png")
@@ -376,14 +455,13 @@ def main():
     generated.mkdir(parents=True, exist_ok=True)
     raw.mkdir(parents=True, exist_ok=True)
     frames.mkdir(parents=True, exist_ok=True)
-    magick = find_magick()
 
     try:
-        sheets = [download_sheet(magick, asset, raw) for asset in ASSETS]
+        sheets = [download_sheet(asset, raw) for asset in ASSETS]
         with tempfile.TemporaryDirectory(prefix="unsigned-versus-") as temporary:
             work_dir = Path(temporary)
             for asset, sheet in zip(ASSETS, sheets):
-                extract_frames(magick, sheet, asset["player"], frames, work_dir)
+                extract_frames(sheet, asset["player"], frames, work_dir)
         pack_frames(ngdevkit, generated)
     except (RuntimeError, OSError, urllib.error.URLError, subprocess.CalledProcessError) as error:
         raise SystemExit(f"asset preparation failed: {error}")
