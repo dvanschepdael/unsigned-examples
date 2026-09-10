@@ -16,7 +16,6 @@ bool versus_fighter_init(
     VersusFighter *fighter,
     const USpriteDefinition *sprite_definition,
     u16 first_sprite,
-    u8 controller_index,
     Vec2 position,
     bool facing_right
 ) {
@@ -24,7 +23,6 @@ bool versus_fighter_init(
     *fighter = (VersusFighter){ 0 };
 
     fighter->player.character = &fighter->character;
-    fighter->player.controller_index = controller_index;
 
     fighter->character.attributes = (UGameplayAttributeContainer){
         .count = VERSUS_ATTRIBUTE_COUNT,
