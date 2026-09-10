@@ -156,29 +156,47 @@ def sort_row_major(components):
     return ordered
 
 
-def is_character_region(width, height, area):
-    """Reject labels, separators, palette strips and tiny detached effects.
+def component_is_plausible(component, sheet_width, sheet_height):
+    """Reject only obvious sheet decorations.
 
-    KOF R-2 fighters are compact but still roughly character-shaped.  The old
-    importer accepted regions as short as 16 px and therefore selected wide
-    horizontal decorations before it ever reached the actual fighter poses.
+    Do not hard-code fighter dimensions here. Connected-component geometry varies
+    with ImageMagick versions and with how detached pixels in a pose get joined.
+    The semantic 64x64 normalization happens later.
     """
-    if width < 12 or height < 24 or width > 96 or height > 96:
+    width = component["w"]
+    height = component["h"]
+    area = component["area"]
+
+    # Background / giant sheet regions.
+    if width >= sheet_width * 0.50 or height >= sheet_height * 0.50:
         return False
 
-    aspect = width / float(height)
-    if aspect < 0.28 or aspect > 2.0:
+    # Tiny text/palette fragments.
+    if width < 6 or height < 10 or area < 50:
         return False
 
-    # Connected-component area is measured on the dilated mask. Character
-    # bodies have substantially more foreground than text fragments/lines.
-    if area < 180:
+    # Horizontal separators and palette strips are the failure visible in GnGeo.
+    if width >= height * 4:
         return False
 
     return True
 
 
+def component_score(component):
+    """Prefer substantial, character-shaped components without assuming a fixed size."""
+    width = component["w"]
+    height = component["h"]
+    area = component["area"]
+    aspect = width / float(max(1, height))
+
+    # Height and foreground area distinguish poses from labels/strips. Penalize
+    # extreme aspect ratios, but do not reject wide attack poses outright.
+    shape_penalty = abs(aspect - 0.8) * 120.0
+    return float(area) + float(height * 12) - shape_penalty
+
+
 def detect_sprite_regions(magick, sheet, work_dir):
+    sheet_width, sheet_height = image_size(magick, sheet)
     background = run(
         [magick, str(sheet), "-format", "%[pixel:p{0,0}]", "info:"], capture=True
     ).strip()
@@ -201,30 +219,54 @@ def detect_sprite_regions(magick, sheet, work_dir):
         "-connected-components", "8", "null:",
     ], capture=True)
 
-    parsed = 0
-    components = []
+    parsed_components = []
     for line in verbose.splitlines():
         match = COMPONENT_RE.match(line)
         if match is None:
             continue
-
-        parsed += 1
         width, height, x, y, area = (int(match.group(index)) for index in range(1, 6))
-        if is_character_region(width, height, area):
-            components.append({"x": x, "y": y, "w": width, "h": height, "area": area})
+        parsed_components.append({"x": x, "y": y, "w": width, "h": height, "area": area})
 
-    components = sort_row_major(components)
-    print(f"{sheet.stem}: connected-components parsed={parsed}, character-like={len(components)}")
+    candidates = [
+        component for component in parsed_components
+        if component_is_plausible(component, sheet_width, sheet_height)
+    ]
 
-    if len(components) < FRAME_COUNT:
+    # If more regions survive than the POC needs, select the strongest 29 first,
+    # then restore sheet order so the downstream animation mapping is deterministic.
+    if len(candidates) >= FRAME_COUNT:
+        selected_pool = sorted(candidates, key=component_score, reverse=True)[:FRAME_COUNT]
+        candidates = sort_row_major(selected_pool)
+    else:
+        candidates = sort_row_major(candidates)
+
+    print(
+        f"{sheet.stem}: connected-components parsed={len(parsed_components)}, "
+        f"plausible={len(candidates)}"
+    )
+
+    if len(candidates) < FRAME_COUNT:
         debug_mask = sheet.parent / f"{sheet.stem}-debug-mask.png"
         shutil.copyfile(mask, debug_mask)
+
+        # Print the component geometry so a build log is enough to diagnose the
+        # next issue; the user should not have to inspect ImageMagick internals.
+        ranked = sorted(parsed_components, key=component_score, reverse=True)
+        print(f"{sheet.stem}: top connected components:", file=sys.stderr)
+        for component in ranked[:min(40, len(ranked))]:
+            print(
+                "  "
+                f"{component['w']}x{component['h']}+{component['x']}+{component['y']} "
+                f"area={component['area']}",
+                file=sys.stderr,
+            )
+
         raise RuntimeError(
-            f"only {len(components)} character-like regions detected in {sheet}; "
+            f"only {len(candidates)} plausible fighter regions detected in {sheet}; "
             f"need {FRAME_COUNT}. Debug mask written to {debug_mask}"
         )
 
-    return transparent, components
+    return transparent, candidates
 
 
 def save_selection_preview(sheet, selected, output):
@@ -257,8 +299,6 @@ def extract_frames(magick, sheet, player, frames_dir, work_dir):
             "-extent", f"{FRAME_SIZE}x{FRAME_SIZE}", str(output),
         ])
 
-        # Never silently ship a nearly-flat frame again. Such a frame is a
-        # sheet decoration, not a fighter pose.
         with Image.open(output).convert("RGBA") as frame:
             alpha_box = frame.getchannel("A").getbbox()
             if alpha_box is None or (alpha_box[3] - alpha_box[1]) < 20:
@@ -285,8 +325,6 @@ def build_indexed_atlas(generated_dir):
 
     atlas.save(generated_dir / "fighters.png")
 
-    # Neo Geo sprite colour index 0 is transparent. Reserve it explicitly,
-    # then place the 15-colour quantized artwork in indices 1..15.
     rgb = Image.new("RGB", atlas.size, (0, 0, 0))
     rgb.paste(atlas.convert("RGB"), mask=atlas.getchannel("A"))
     quantized = rgb.quantize(colors=15, dither=Image.Dither.NONE)
