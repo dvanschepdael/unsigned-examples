@@ -9,6 +9,13 @@ static s16 clamp_s16(s16 value, s16 minimum, s16 maximum) {
 static void start_attack(VersusFighter *fighter, VersusAttackKind attack) {
     fighter->attack = attack;
     fighter->attack_connected = false;
+
+    /* A directional command is consumed once accepted; old QCF history must not
+       turn a later A press into another special by accident. */
+    if (attack == VERSUS_ATTACK_SPECIAL) {
+        versus_fighter_input_reset(fighter);
+    }
+
     versus_fighter_set_state(fighter, VERSUS_FIGHTER_ATTACK);
 }
 
