@@ -2,6 +2,7 @@
 
 #include "actor/player_pool.h"
 #include "level/level_actor.h"
+#include "level/level_runtime.h"
 
 #include "versus_config.h"
 #include "versus_content.h"
