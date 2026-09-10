@@ -1,30 +1,27 @@
 # Versus Fighting POC
 
-A C99 Neo Geo AES/MVS proof of concept showing how to build a local 1-vs-1 fighting game **with the existing Unsigned runtime**, instead of recreating actor, level, state, collision and rendering systems beside the engine.
+A small C99 Neo Geo AES/MVS proof of concept showing how to build a local 1-vs-1 fighting game with the existing Unsigned runtime.
 
-## What the POC demonstrates
+The goal of this example is educational: each file has one clear responsibility, generic systems stay in Unsigned, and the example only implements rules that are specific to a versus fighting game.
 
-- two local `UPlayer` instances backed by `UCharacter` / `UActor`;
-- a real `ULevelDefinition` for the fighting arena;
-- `UGameInstance` as the top-level gameplay/runtime composition root;
-- `UStateGraph` for fighter states and match/round flow;
-- Unsigned player pools for ownership and controller routing;
-- Unsigned level collision registration and hit detection;
-- Unsigned level renderer and viewport for actor rendering;
-- best-of-three rounds and a 60-second timer;
-- automatic facing, walking, crouching and jumping;
-- light attack, heavy attack and quarter-circle-forward + A special;
-- frame-authored hitboxes and hurtboxes;
-- hitstun, blockstun, hitstop and pushback;
-- health HUD.
+## What comes from Unsigned
 
-## Architecture
+The example intentionally reuses the engine instead of recreating parallel systems:
 
-The example deliberately separates reusable engine responsibilities from versus-specific rules.
+- `UGameInstance` owns input, actor pools, level runtime, collision, viewport and rendering;
+- each fighter is a `UPlayer` backed by `UCharacter -> UActor -> USprite`;
+- health is stored as a `UGameplayAttribute` in `UCharacter.attributes`;
+- `UStateGraph` drives fighter states and round/match states;
+- `unsigned_player_pool_reserve()` owns player/controller routing;
+- `ULevelDefinition` represents the fighting arena;
+- the level collision pipeline transforms frame hitboxes/hurtboxes and produces `UCollisionHit` pairs;
+- `ULevelRenderer` renders the fighters from their normal `UActor` state.
 
-`VersusGame` owns a `UGameInstance` plus its caller-owned fixed storage. Unsigned therefore owns the input manager, actor pools, level runtime, collision manager, viewport and level renderer.
+The example therefore adds only fighting-game concepts: movement rules, command history, attacks, pushboxes, hit/block reactions, hitstop and round rules.
 
-Each `VersusFighter` is composed as:
+## Runtime model
+
+Each fighter follows the normal Unsigned composition:
 
 ```text
 UPlayer
@@ -33,23 +30,115 @@ UPlayer
             -> USprite
 ```
 
-The fighter-specific structure only adds data that is specific to a fighting game: command history, velocity, health, current attack, hitstun and its `UStateGraph`.
+`VersusFighter` adds only the state needed by the genre:
 
-The arena is a `ULevelDefinition`. Its `load` callback creates/reserves both `UPlayer` instances and its `resolve_hits` callback interprets Unsigned's generic `UCollisionHit` results as fighting-game damage/block reactions.
+```text
+VersusFighter
+  player / character        generic Unsigned runtime
+  attributes                health through UGameplayAttribute
+  states                    UStateGraph adapter
+  input_buffer              directional command history
+  velocity                  fighting movement
+  attack                    current move
+  stun_frames               hitstun / blockstun
+  attack_connected          one hit per move in this POC
+```
 
-Both fighter flow (`idle`, `walk`, `crouch`, `jump`, `attack`, `block`, `hitstun`, `KO`) and match flow (`intro`, `fight`, `outro`, `match over`) use `UStateGraph` rather than hand-maintained switch-only state machines.
+There is no duplicate position, sprite, health or current-state field. `UActor.position`, `UCharacter.attributes`, `USprite` and `UStateGraph.current` remain the sources of truth.
 
-`UActor.position` remains the gameplay/physics origin at the fighter's feet. The visual `-32,-64` alignment is stored in `USprite.offset`, so rendering uses the engine's normal `ULevelRenderer` without special-case coordinate conversion.
+## Responsibility split
 
-## Source layout
+| File | Responsibility |
+| --- | --- |
+| `main.c` | Minimal Neo Geo entry point. Builds `UNeoGeoRuntimeDefinition` and hands control to Unsigned. |
+| `src/versus_game.*` | Application lifecycle. Creates `UGameInstance`, connects fixed storage, handles AES/MVS phases and coordinates match/world ticks. |
+| `src/versus_config.h` | Small tunable values: health, timings, stage limits, movement speeds and fixed capacities. |
+| `src/versus_arena.*` | The `ULevelDefinition`. Creates/reserves the two players and forwards Unsigned collision hits to the match rules. |
+| `src/versus_match.*` | Round and match rules only: intro/fight/outro flow, timer, score, pushbox separation, damage/block decision and hitstop. |
+| `src/versus_fighter.c` | One fighter's gameplay behavior: movement, attacks, jump, stun and reactions. |
+| `src/versus_fighter_state.c` | Maps fighter states to animations and connects them to `UStateGraph`. |
+| `src/versus_fighter_input.c` | Fighting-game command history and QCF recognition only. |
+| `src/versus_state.*` | Tiny common adapter that removes repeated boilerplate for simple enum-like `UStateGraph` graphs. |
+| `src/versus_content.*` | Immutable content: animations, frame timings, hitboxes/hurtboxes, palettes and attack tuning. |
+| `src/versus_hud.*` | FIX-layer presentation only. It reads match/fighter state and does not own gameplay rules. |
 
-- `main.c`: adapts the example to `UNeoGeoRuntimeDefinition`.
-- `src/versus_game.*`: creates/configures `UGameInstance` and integrates AES/MVS phases.
-- `src/versus_match.*`: `ULevelDefinition`, match `UStateGraph`, round rules and interpretation of level collision hits.
-- `src/versus_fighter.*`: `UPlayer`/`UCharacter` composition, fighter `UStateGraph`, movement and command buffer.
-- `src/versus_content.*`: immutable animation/frame/hitbox content.
-- `src/versus_hud.*`: FIX-layer HUD only.
-- `scripts/prepare-fighting-assets.py`: downloads/normalizes teaching spritesheets and generates Neo Geo C-ROM data.
+## Recommended reading order
+
+For a beginner, read the example in this order:
+
+1. `main.c` -- see how a Neo Geo application enters Unsigned.
+2. `versus_game.c` -- see how one `UGameInstance` is configured and ticked.
+3. `versus_arena.c` -- see how a `ULevelDefinition` creates players and receives collision results.
+4. `versus_match.c` -- see the rules of one versus match.
+5. `versus_fighter.c` -- see how one fighter reacts to input and game events.
+6. `versus_fighter_state.c` -- see how gameplay states select animations through `UStateGraph`.
+7. `versus_fighter_input.c` -- see the small directional command buffer used for QCF+A.
+8. `versus_content.c` -- tune animation frames, collision boxes and attack properties without changing the rules.
+
+This order goes from composition to rules to implementation details.
+
+## Fighting flow
+
+A normal frame during the fight is intentionally straightforward:
+
+```text
+Neo Geo runtime polls input
+        |
+        v
+versus_match_update()
+  - facing
+  - fighter decisions/movement
+  - round timer / pushboxes
+        |
+        v
+unsigned_game_instance_tick()
+  - player/actor animation tick
+  - level collision registration
+  - hit detection
+        |
+        v
+VERSUS_ARENA_LEVEL.resolve_hits
+        |
+        v
+versus_match_resolve_hit()
+  - block or damage
+  - hitstun / blockstun
+  - hitstop
+        |
+        v
+unsigned_game_instance_render()
+        +
+versus_hud_render()
+```
+
+During hitstop, the example freezes both match logic and the Unsigned actor/animation world tick. This keeps the visual pause consistent with fighting-game behavior.
+
+## State machines
+
+Two simple state machines use Unsigned `UStateGraph`:
+
+- fighter: `idle`, `walk`, `crouch`, `jump`, `attack`, `block`, `hitstun`, `KO`;
+- match: `intro`, `fight`, `outro`, `match over`.
+
+`versus_state.*` does not replace `UStateGraph`. It only owns the repetitive fixed node/transition storage for this common pattern: event `N` enters state `N`.
+
+The active state is always derived from `UStateGraph.current`; there is no second enum field that could become desynchronized.
+
+## Content-driven attacks
+
+Attack behavior is described in `VersusAttackDefinition` rather than spread through match logic. Each attack defines:
+
+- animation;
+- damage;
+- pushback;
+- hitstun;
+- blockstun;
+- hitstop on hit;
+- hitstop on block.
+
+The active frames themselves remain authored in the corresponding `UFrame` arrays through their hitboxes. This keeps move data separate from move execution.
+
+The QCF command buffer is intentionally custom. Unsigned input/ability bindings are appropriate for ordinary button triggers, while a fighting-game directional sequence needs ordered input history. Keeping all fighting commands in one small module is clearer than splitting one command grammar between two systems.
 
 ## Controls
 
@@ -61,13 +150,15 @@ Both fighter flow (`idle`, `walk`, `crouch`, `jump`, `attack`, `block`, `hitstun
 - B: heavy attack
 - Down, down-forward, forward + A: special attack
 
+A recognized QCF is consumed when the special starts, so an old directional sequence cannot accidentally trigger another special on a later A press.
+
 ## Spritesheets
 
 The teaching art comes from The Spriters Resource, using Kyo and Iori from *The King of Fighters R-2*. Source attribution is kept in `assets/source/README.md`.
 
-The automatic asset pipeline downloads the source sheets, detects/normalizes frames to 64x64 cells, builds a shared indexed atlas, then generates `fighters.c1` / `fighters.c2` with ngdevkit `tiletool.py`.
+The automatic asset pipeline downloads the source sheets, detects and normalizes frames to 64x64 cells, builds a shared indexed atlas, then generates `fighters.c1` and `fighters.c2` with ngdevkit `tiletool.py`.
 
-The extraction is intentionally a simple educational importer. It is independent from the runtime architecture and the exact semantic animation mapping can be refined separately.
+The importer is intentionally simple and educational. Asset extraction is independent from the runtime architecture, so the exact animation mapping can be refined without changing gameplay code.
 
 ## Build
 
@@ -81,9 +172,9 @@ make gngeo-aes
 make gngeo-mvs
 ```
 
-Requirements for automatic graphics generation are Python 3 and ImageMagick (`magick`) in addition to the normal ngdevkit toolchain.
+Python 3 and ImageMagick (`magick`) are required by the automatic graphics pipeline in addition to the normal ngdevkit toolchain.
 
-To force regeneration:
+To force a complete regeneration:
 
 ```sh
 make distclean
