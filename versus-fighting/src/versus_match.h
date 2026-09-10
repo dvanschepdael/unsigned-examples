@@ -17,10 +17,8 @@ typedef enum VersusRoundPhase {
 typedef struct VersusMatch {
     VersusFighter fighters[VERSUS_PLAYER_COUNT];
 
-    /* Round flow uses the same small UStateGraph adapter as fighters. */
+    /* Round flow is backed by Unsigned's UStateGraph through the shared adapter. */
     VersusStateMachine states;
-    UStateGraphNode state_nodes[VERSUS_ROUND_PHASE_COUNT];
-    UStateGraphTransition state_transitions[VERSUS_ROUND_PHASE_COUNT];
 
     const UInputManager *frame_input;
     u16 phase_frames;
