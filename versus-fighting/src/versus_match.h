@@ -38,8 +38,9 @@ void versus_match_update(VersusMatch *match, const UInputManager *input);
 
 VersusRoundPhase versus_match_phase(const VersusMatch *match);
 bool versus_match_finished(const VersusMatch *match);
+bool versus_match_world_paused(const VersusMatch *match);
 
-/* Called by the arena's level callback when Unsigned reports an attacker/target pair. */
+/* Called by the arena when Unsigned reports an attacker/target collision pair. */
 void versus_match_resolve_hit(VersusMatch *match, UActor *attacker, UActor *target);
 
 #endif
