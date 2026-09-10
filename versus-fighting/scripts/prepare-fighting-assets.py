@@ -9,7 +9,6 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -119,130 +118,121 @@ def download_sheet(asset, raw_dir):
     )
 
 
-def longest_horizontal_run(image, color):
-    pixels = image.load()
-    width, height = image.size
-    longest = 0
-    for y in range(height):
-        current = 0
-        for x in range(width):
-            pixel = pixels[x, y]
-            if pixel[3] != 0 and pixel[:3] == color:
-                current += 1
-                longest = max(longest, current)
-            else:
-                current = 0
-    return longest
+def same_color_regions(source):
+    """Return 4-connected regions of identical opaque RGB pixels.
 
-
-def longest_vertical_run(image, color):
-    pixels = image.load()
-    width, height = image.size
-    longest = 0
-    for x in range(width):
-        current = 0
-        for y in range(height):
-            pixel = pixels[x, y]
-            if pixel[3] != 0 and pixel[:3] == color:
-                current += 1
-                longest = max(longest, current)
-            else:
-                current = 0
-    return longest
-
-
-def border_color_counts(image):
-    width, height = image.size
-    band = max(2, min(12, min(width, height) // 32))
-    counts = Counter()
-    total = 0
-    pixels = image.load()
-
-    for y in range(height):
-        for x in range(width):
-            if x >= band and x < width - band and y >= band and y < height - band:
-                continue
-            red, green, blue, alpha = pixels[x, y]
-            if alpha == 0:
-                continue
-            counts[(red, green, blue)] += 1
-            total += 1
-
-    return counts, total
-
-
-def detect_background_colors(image):
-    """Detect flat sheet backgrounds without relying on one specific layout.
-
-    The Spriters Resource sheets are not normalized: some use solid fields,
-    some use several flat colours, and dense sheets may contain only narrow
-    gaps between poses. Background colours are inferred from opaque corners,
-    the outer border, dominant global colours and long straight runs.
+    Sprite sheets often reuse the same four colours for both artwork and sheet
+    decoration. Therefore a colour must never be removed globally: only large
+    flat regions of that colour are background candidates.
     """
-    rgba = image.convert("RGBA")
-    width, height = rgba.size
-    pixels = pixel_data(rgba)
-    opaque = [pixel for pixel in pixels if pixel[3] != 0]
-    if not opaque:
-        return set()
+    width, height = source.size
+    pixels = pixel_data(source)
+    visited = bytearray(width * height)
+    regions = []
 
-    counts = Counter(pixel[:3] for pixel in opaque)
-    border_counts, border_total = border_color_counts(rgba)
-    opaque_total = len(opaque)
-    backgrounds = set()
-
-    for x, y in ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)):
-        pixel = rgba.getpixel((x, y))
-        if pixel[3] != 0:
-            backgrounds.add(pixel[:3])
-
-    # Catch checkerboard/striped backgrounds whose individual colour runs are
-    # too short for the old long-run heuristic. A true sheet background tends
-    # to dominate the outer border as well as a meaningful part of the image.
-    if border_total > 0:
-        for color, border_count in border_counts.most_common(16):
-            global_count = counts[color]
-            border_share = border_count / float(border_total)
-            global_share = global_count / float(opaque_total)
-            if border_share >= 0.03 and global_share >= 0.005:
-                backgrounds.add(color)
-
-    # Also catch a dominant field that may not reach every edge because the
-    # author placed a frame or title around the sheet.
-    for color, count in counts.most_common(16):
-        global_share = count / float(opaque_total)
-        if global_share >= 0.12:
-            backgrounds.add(color)
-
-    minimum_count = max(128, (width * height) // 1000)
-    long_run = max(48, min(width, height) // 7)
-    for color, count in counts.most_common(32):
-        if count < minimum_count:
-            break
-        if color in backgrounds:
+    for start in range(width * height):
+        if visited[start] or pixels[start][3] == 0:
             continue
-        if longest_horizontal_run(rgba, color) >= long_run or longest_vertical_run(rgba, color) >= long_run:
-            backgrounds.add(color)
 
-    return backgrounds
+        color = pixels[start][:3]
+        stack = [start]
+        visited[start] = 1
+        members = []
+        min_x = max_x = start % width
+        min_y = max_y = start // width
+        touches_border = False
+
+        while stack:
+            index = stack.pop()
+            members.append(index)
+            x = index % width
+            y = index // width
+            min_x = min(min_x, x)
+            max_x = max(max_x, x)
+            min_y = min(min_y, y)
+            max_y = max(max_y, y)
+            if x == 0 or y == 0 or x == width - 1 or y == height - 1:
+                touches_border = True
+
+            if x > 0:
+                neighbor = index - 1
+                if not visited[neighbor] and pixels[neighbor][3] != 0 and pixels[neighbor][:3] == color:
+                    visited[neighbor] = 1
+                    stack.append(neighbor)
+            if x + 1 < width:
+                neighbor = index + 1
+                if not visited[neighbor] and pixels[neighbor][3] != 0 and pixels[neighbor][:3] == color:
+                    visited[neighbor] = 1
+                    stack.append(neighbor)
+            if y > 0:
+                neighbor = index - width
+                if not visited[neighbor] and pixels[neighbor][3] != 0 and pixels[neighbor][:3] == color:
+                    visited[neighbor] = 1
+                    stack.append(neighbor)
+            if y + 1 < height:
+                neighbor = index + width
+                if not visited[neighbor] and pixels[neighbor][3] != 0 and pixels[neighbor][:3] == color:
+                    visited[neighbor] = 1
+                    stack.append(neighbor)
+
+        regions.append({
+            "color": color,
+            "members": members,
+            "x": min_x,
+            "y": min_y,
+            "w": max_x - min_x + 1,
+            "h": max_y - min_y + 1,
+            "area": len(members),
+            "touches_border": touches_border,
+        })
+
+    return regions
+
+
+def is_sheet_decoration(region, sheet_width, sheet_height):
+    """Identify a flat sheet region without deleting that RGB from the sprites."""
+    width = region["w"]
+    height = region["h"]
+    area = region["area"]
+    box_area = width * height
+    fill = area / float(max(1, box_area))
+    sheet_area = sheet_width * sheet_height
+
+    if region["touches_border"] and area >= 48:
+        return True
+
+    if area >= max(512, sheet_area // 300):
+        return True
+
+    if width >= sheet_width // 5 and height <= 8 and fill >= 0.60:
+        return True
+    if height >= sheet_height // 5 and width <= 8 and fill >= 0.60:
+        return True
+
+    if fill >= 0.90 and area >= 192 and (width >= sheet_width // 8 or height >= sheet_height // 8):
+        return True
+
+    return False
 
 
 def build_foreground_images(sheet, work_dir):
     source = Image.open(sheet).convert("RGBA")
-    background_colors = detect_background_colors(source)
+    width, height = source.size
+    source_pixels = pixel_data(source)
+    cleaned_pixels = list(source_pixels)
 
-    cleaned = source.copy()
-    cleaned_pixels = []
-    for red, green, blue, alpha in pixel_data(source):
-        if alpha == 0 or (red, green, blue) in background_colors:
-            cleaned_pixels.append((red, green, blue, 0))
-        else:
-            cleaned_pixels.append((red, green, blue, 255))
+    regions = same_color_regions(source)
+    removed = []
+    for region in regions:
+        if not is_sheet_decoration(region, width, height):
+            continue
+        removed.append(region)
+        for index in region["members"]:
+            red, green, blue, _ = cleaned_pixels[index]
+            cleaned_pixels[index] = (red, green, blue, 0)
+
+    cleaned = Image.new("RGBA", source.size)
     cleaned.putdata(cleaned_pixels)
-
-    # Do not dilate the mask. Dense sheets can place two poses only one or two
-    # pixels apart; the previous MaxFilter(5) merged the complete Iori sheet
-    # into a single 796x583 component.
     mask = cleaned.getchannel("A").point(lambda value: 255 if value else 0)
 
     transparent_path = work_dir / f"{sheet.stem}-transparent.png"
@@ -250,10 +240,13 @@ def build_foreground_images(sheet, work_dir):
     cleaned.save(transparent_path)
     mask.save(mask_path)
 
-    colors = ", ".join(f"#{r:02x}{g:02x}{b:02x}" for r, g, b in sorted(background_colors))
+    removed_colors = sorted({region["color"] for region in removed})
+    colors = ", ".join(f"#{r:02x}{g:02x}{b:02x}" for r, g, b in removed_colors)
+    removed_pixels = sum(region["area"] for region in removed)
     print(
-        f"{sheet.stem}: removed {len(background_colors)} sheet background colours"
-        f"{(' [' + colors + ']') if colors else ''}; debug mask: {mask_path}"
+        f"{sheet.stem}: removed {len(removed)} background/separator regions "
+        f"({removed_pixels} pixels, {len(removed_colors)} colours"
+        f"{(': ' + colors) if colors else ''}); debug mask: {mask_path}"
     )
     return cleaned, mask
 
