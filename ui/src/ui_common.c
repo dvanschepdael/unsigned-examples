@@ -5,11 +5,21 @@
 #include "display/ui/widget/panel.h"
 #include "display/ui/widget/progress_bar.h"
 #include "system/fix.h"
+#include "system/renderer_backend.h"
 
 #include <stdio.h>
 
 #define UI_EXAMPLE_FIX_COLUMNS 40u
 #define UI_EXAMPLE_CHAR_WIDTH 8u
+
+/* The shadow FIX font bundled with ngdevkit uses palette entries 1 and 2.
+ * Palette RAM is not initialized by unsigned_video_init(), so a UI-only
+ * project must provide the FIX palette explicitly before drawing text. */
+static const u16 UI_EXAMPLE_FIX_PALETTE[16] = {
+    0x8000u, /* transparent / black */
+    0x0fffu, /* white glyph */
+    0x0555u, /* gray shadow */
+};
 
 static u8 ui_example_row(const UUIElement *element) {
     return element != NULL ? (u8)(element->bounds.y / UI_EXAMPLE_CHAR_WIDTH) : 0u;
@@ -175,6 +185,11 @@ void ui_example_renderer_init(UUIRenderer *renderer, UNeoGeoUIRenderer *backend,
     if (renderer == NULL || backend == NULL || theme == NULL) {
         return;
     }
+
+    /* Keep hardware setup in the common Neo Geo presentation layer. This mirrors
+     * ngdevkit's official FIX examples while using Unsigned's palette backend. */
+    unsigned_palette_backend_load(config.palette, UI_EXAMPLE_FIX_PALETTE);
+    unsigned_palette_backend_set_backdrop_color(0x8000u);
 
     *theme = (UUITheme){ 0 };
     unsigned_neo_geo_ui_renderer_init(renderer, backend, theme, &config);
