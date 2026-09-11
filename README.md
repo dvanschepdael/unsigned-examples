@@ -2,11 +2,12 @@
 
 Educational Neo Geo AES/MVS examples for the Unsigned engine.
 
-Each genre lives in its own directory and keeps gameplay-specific code local while sharing pinned dependencies under `external/`.
+Each genre or subsystem lives in its own directory and keeps example-specific code local while sharing pinned dependencies under `external/`.
 
 ## Examples
 
 - [`versus-fighting/`](versus-fighting/) - local 1-vs-1 fighting game POC with frame data, command buffering, blocking, hitstop, rounds and match flow.
+- [`ui/`](ui/) - beginner-friendly UI component gallery with one demonstration level per widget/concept, shared runtime code, menu navigation and page overlays.
 
 ## Setup
 
@@ -14,6 +15,8 @@ Each genre lives in its own directory and keeps gameplay-specific code local whi
 git clone https://github.com/dvanschepdael/unsigned-examples.git
 cd unsigned-examples
 ./scripts/setup-deps.sh
-cd versus-fighting
+cd ui
 make -j2
 ```
+
+Each example directory has its own README with controls and architecture notes.
