@@ -89,6 +89,9 @@ make gngeo-mvs
 
 The Makefile follows the same pinned ngdevkit/Unsigned setup as the other examples in this repository.
 
+For MAME, use `make mame-aes` (or `make mame`) and `make mame-mvs`.
+See the [MAME setup instructions](../README.md#run-with-mame) for executable and option configuration.
+
 ## Reading order
 
 For a first pass, read these files in order:

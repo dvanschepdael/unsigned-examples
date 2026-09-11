@@ -172,6 +172,9 @@ make gngeo-mvs
 
 Python 3 and ImageMagick (`magick`) are required by the automatic graphics pipeline in addition to the normal ngdevkit toolchain.
 
+For MAME, use `make mame-aes` (or `make mame`) and `make mame-mvs`.
+See the [MAME setup instructions](../README.md#run-with-mame) for executable and option configuration.
+
 To force a complete regeneration:
 
 ```sh

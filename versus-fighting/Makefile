@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .DELETE_ON_ERROR:
 
 BUILDDIR := build
-GAMEROM := unsigned-versus
+GAMEROM := unsigned_versus
 GAMETITLE := Unsigned Versus Fighting POC
 NGDEVKIT_DIR := ../external/ngdevkit
 UNSIGNED_DIR := ../external/unsigned
@@ -21,6 +21,8 @@ M68KOBJCOPY := m68k-neogeo-elf-objcopy
 Z80SDOBJCOPY := z80-neogeo-ihx-sdobjcopy
 PYTHON := python3
 GNGEO := ngdevkit-gngeo
+MAME := mame
+MAME_FLAGS := -window -resolution 960x672 -noautosave -skip_gameinfo
 PKGCONFIG := pkg-config
 CFLAGS := -std=c99 -O2 -g -Wall -Wextra -fomit-frame-pointer -Isrc
 LDFLAGS := -Wl,--defsym,rom_eye_catcher_mode=2
@@ -39,7 +41,7 @@ $(error Run ../scripts/setup-deps.sh from the repository root first)
 endif
 include $(UNSIGNED_DIR)/unsigned.mk
 
-.PHONY: all sdk cart bios clean distclean gngeo gngeo-aes gngeo-mvs assets
+.PHONY: all sdk cart bios clean distclean gngeo gngeo-aes gngeo-mvs assets mame mame-aes mame-mvs
 all: cart bios
 sdk: $(SDK_STAMP)
 assets: $(ASSET_STAMP)
@@ -109,6 +111,12 @@ gngeo-aes: all $(ROM)/gngeo_data.zip
 	$(GNGEO) --system home --scale 3 -i $(ROM) -d $(ROM)/gngeo_data.zip $(GAMEROM)
 gngeo-mvs: all $(ROM)/gngeo_data.zip
 	$(GNGEO) --system arcade --scale 3 -i $(ROM) -d $(ROM)/gngeo_data.zip $(GAMEROM)
+
+mame: mame-aes
+mame-aes: all
+	"$(MAME)" $(MAME_FLAGS) -hashpath "$(ROM)" -rompath "$(ROM)" -snapshot_directory "$(BUILDDIR)/mame/snap" -cfg_directory "$(BUILDDIR)/mame/cfg" -nvram_directory "$(BUILDDIR)/mame/nvram" aes -cart $(GAMEROM)
+mame-mvs: all
+	"$(MAME)" $(MAME_FLAGS) -hashpath "$(ROM)" -rompath "$(ROM)" -snapshot_directory "$(BUILDDIR)/mame/snap" -cfg_directory "$(BUILDDIR)/mame/cfg" -nvram_directory "$(BUILDDIR)/mame/nvram" neogeo -cart1 $(GAMEROM)
 
 clean:
 	rm -rf build/unsigned build/rom build/src
