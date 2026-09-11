@@ -2,7 +2,7 @@
 #define VERSUS_GAME_H
 
 #include "game/game.h"
-#include "system/neogeo/runtime.h"
+#include "system/runtime.h"
 
 #include "versus_config.h"
 #include "versus_match.h"

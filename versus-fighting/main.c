@@ -1,6 +1,6 @@
 #include "versus_game.h"
 
-#include "system/neogeo/runtime.h"
+#include "system/runtime.h"
 
 static int run_game(bool mvs_title) {
     VersusGame game = { 0 };

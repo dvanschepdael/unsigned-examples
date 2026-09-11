@@ -1,7 +1,7 @@
 #include "versus_game.h"
 
 #include "display/sprite/palette.h"
-#include "system/neogeo/video.h"
+#include "system/video.h"
 
 #include "versus_arena.h"
 #include "versus_content.h"
